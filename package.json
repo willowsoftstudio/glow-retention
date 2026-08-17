@@ -12,6 +12,7 @@
     "db:push": "prisma db push",
     "db:seed": "prisma db seed",
     "deploy": "node scripts/deploy.cjs",
+    "dev": "shopify app dev",
     "lint": "tsc --noEmit"
   },
   "dependencies": {

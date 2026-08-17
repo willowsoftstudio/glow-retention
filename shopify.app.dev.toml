@@ -1,8 +1,8 @@
 # Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
 client_id = "a6fdc665c9359293be00639379ae34be"
-name = "Beauty Subscription Optimizer (Dev)"
-application_url = "https://beauty-subscription-optimizer-dev.vercel.app"
+name = "Glow Retention (Dev)"
+application_url = "https://glow-retention-git-develop-willowsoftstudio-5437s-projects.vercel.app"
 embedded = true
 
 [build]
@@ -20,7 +20,7 @@ scopes = "write_products,read_products,write_customers,read_customers,write_draf
 
 [auth]
 redirect_urls = [
-  "https://beauty-subscription-optimizer-dev.vercel.app/api/auth/callback"
+  "https://glow-retention-git-develop-willowsoftstudio-5437s-projects.vercel.app/api/auth/callback"
 ]
 
 # ==============================================================================
