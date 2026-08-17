@@ -473,6 +473,20 @@ app.get("/", (req, res) => {
   <meta charset="UTF-8">
   <title>Beauty Subscription Optimizer — Merchant Hub</title>
   <meta name="shopify-api-key" content="${apiKey}" />
+  <script>
+    // Self-healing App Bridge Handshake snippet
+    (function() {
+      const urlParams = new URLSearchParams(window.location.search);
+      const shop = urlParams.get("shop");
+      const host = urlParams.get("host");
+      
+      if (window.top !== window.self && !host && shop) {
+        const shopName = shop.split(".")[0];
+        console.warn("[Glow Retention] Missing critical 'host' parameter inside iframe. Forcing self-healing redirect to Shopify Admin...");
+        window.parent.location.href = "https://admin.shopify.com/store/" + shopName + "/apps/${apiKey}";
+      }
+    })();
+  </script>
   <!-- Load Shopify Polaris CSS for official merchant look & feel -->
   <link rel="stylesheet" href="https://unpkg.com/@shopify/polaris@12.0.0/build/esm/styles.css">
   <style>
