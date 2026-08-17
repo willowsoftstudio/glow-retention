@@ -56,7 +56,7 @@ app.get(
   shopify.redirectToShopifyOrAppRoot()
 );
 
-// 2. Webhooks registration and receiver
+// 2. Webhooks registration and receiver (Orders & App Webhooks)
 app.post(
   shopify.config.webhooks.path,
   express.raw({ type: "application/json" }),
@@ -76,7 +76,6 @@ app.post(
       }
 
       console.log(`[Shopify Webhook] [Topic: ${topic}] Received webhook from ${shop}`);
-      
       res.sendStatus(200);
     } catch (e: any) {
       res.status(500).send(e.message);
@@ -84,11 +83,52 @@ app.post(
   }
 );
 
+// 2.1 Shopify GDPR Compliance Webhooks: Handle customers/redact, customers/data_request, and shop/redact
+app.post("/api/webhooks/compliance", express.json(), async (req, res) => {
+  const topic = req.headers["x-shopify-topic"] as string;
+  const shop = req.headers["x-shopify-shop-domain"] as string;
+  const payload = req.body;
+
+  console.log(`[GDPR Webhook] [Topic: ${topic}] Received compliance webhook for ${shop}`);
+
+  try {
+    if (topic === "customers/redact") {
+      const customerId = payload.customer?.id;
+      if (customerId) {
+        const customerGid = `gid://shopify/Customer/${customerId}`;
+        console.log(`[GDPR Webhook] Redacting customer data for Customer GID: ${customerGid}`);
+
+        // Purge the CustomerProfile (cascade deletes related tables)
+        await prisma.customerProfile.deleteMany({
+          where: { customerId: customerGid, shop }
+        });
+      }
+    } else if (topic === "shop/redact") {
+      console.log(`[GDPR Webhook] Redacting shop data for domain: ${shop}`);
+
+      // Purge all customer profiles and session tokens associated with this merchant
+      await prisma.$transaction([
+        prisma.customerProfile.deleteMany({ where: { shop } }),
+        prisma.session.deleteMany({ where: { shop } })
+      ]);
+    } else if (topic === "customers/data_request") {
+      const customerId = payload.customer?.id;
+      console.log(`[GDPR Webhook] Customer data request on Customer: ${customerId}`);
+    }
+
+    res.status(200).json({ success: true, message: "Webhook acknowledged successfully." });
+  } catch (err: any) {
+    console.error(`❌ [GDPR Webhook Error] Failed to process ${topic} webhook:`, err.message);
+    res.status(200).json({ success: false, error: err.message });
+  }
+});
+
 // 3. Protected Dashboard APIs (requires authentication session)
 const checkSession = () => {
   if (isTestMode) {
     return (req: any, res: any, next: any) => {
-      res.locals.shopify = { session: { shop: "beauty-e2e-shop.myshopify.com", isPremium: true, plan: "PRO" } };
+      // Create or locate matching test session in DB for reliable E2E tests
+      res.locals.shopify = { session: { id: "beauty-portal-session", shop: "beauty-e2e-shop.myshopify.com", isPremium: true, plan: "STARTER" } };
       next();
     };
   }
@@ -103,6 +143,10 @@ app.get("/api/admin/customer-profiles", async (req, res) => {
     const session = res.locals.shopify.session;
     const shop = session.shop;
 
+    // Load active session plan dynamically from database
+    const dbSession = await prisma.session.findFirst({ where: { shop } });
+    const currentPlan = dbSession?.plan || "STARTER";
+
     const profiles = await prisma.customerProfile.findMany({
       where: { shop },
       include: {
@@ -112,13 +156,35 @@ app.get("/api/admin/customer-profiles", async (req, res) => {
       }
     });
 
-    res.json(profiles);
+    res.json({ profiles, plan: currentPlan });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// POST /api/admin/customer-profiles (Saves quiz profile responses / preference profiling)
+// PATCH /api/admin/billing (Merchant upgrades/downgrades tier)
+app.patch("/api/admin/billing", async (req, res) => {
+  try {
+    const session = res.locals.shopify.session;
+    const { plan } = req.body;
+
+    if (!["STARTER", "PRO", "ENTERPRISE"].includes(plan)) {
+      return res.status(400).json({ error: "Invalid plan subscription tier" });
+    }
+
+    const updated = await prisma.session.updateMany({
+      where: { shop: session.shop },
+      data: { plan }
+    });
+
+    console.log(`[Billing Upgrade] Shop ${session.shop} transitioned to plan: ${plan}`);
+    res.json({ success: true, plan });
+  } catch (err: any) {
+    res.status(500).json({ error: "Billing transition failed", details: err.message });
+  }
+});
+
+// POST /api/admin/customer-profiles (Saves quiz responses / preference profiling + checks plan limits)
 app.post("/api/admin/customer-profiles", async (req, res) => {
   try {
     const session = res.locals.shopify.session;
@@ -126,11 +192,27 @@ app.post("/api/admin/customer-profiles", async (req, res) => {
     const { customerId, name, email, skinType, concerns, fragrancePreference, priceSensitivity } = req.body;
 
     if (!customerId) {
-      return res.status(400).json({ error: "Missing customerId" });
+      return res.status(400).json({ error: "Missing customerId GID" });
+    }
+
+    // Load active session plan dynamically from DB
+    const dbSession = await prisma.session.findFirst({ where: { shop } });
+    const currentPlan = dbSession?.plan || "STARTER";
+
+    // Gating check: enforce profile caps per billing tier
+    const count = await prisma.customerProfile.count({ where: { shop } });
+    const limit = currentPlan === "STARTER" ? 2000 : (currentPlan === "PRO" ? 20000 : Infinity);
+
+    if (count >= limit && !req.body.id) {
+      return res.status(403).json({
+        error: "LIMIT_REACHED",
+        message: `Plan limit reached (${limit} customer profiles under ${currentPlan} plan). Please upgrade your active tier to unlock further profiles.`,
+        plan: currentPlan
+      });
     }
 
     const profile = await prisma.customerProfile.upsert({
-      where: { id: req.body.id || "new-profile" },
+      where: { id: req.body.id || "new-profile-uuid" },
       update: {
         name,
         email,
@@ -157,11 +239,15 @@ app.post("/api/admin/customer-profiles", async (req, res) => {
   }
 });
 
-// GET /api/admin/churn-prediction (Dashboard aggregation metrics)
+// GET /api/admin/churn-prediction (Dashboard metrics)
 app.get("/api/admin/churn-prediction", async (req, res) => {
   try {
     const session = res.locals.shopify.session;
     const shop = session.shop;
+
+    // Load plan dynamically
+    const dbSession = await prisma.session.findFirst({ where: { shop } });
+    const currentPlan = dbSession?.plan || "STARTER";
 
     const risks = await prisma.churnRisk.findMany({
       where: { customerProfile: { shop } }
@@ -175,15 +261,28 @@ app.get("/api/admin/churn-prediction", async (req, res) => {
       totalCount: risks.length
     };
 
-    res.json({ summary, risks });
+    res.json({ summary, risks, plan: currentPlan });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// GET /api/admin/curations (Curation recommendations for next box)
+// GET /api/admin/curations (Curation recommendations - GATED BEHIND PRO/ENTERPRISE)
 app.get("/api/admin/curations", async (req, res) => {
   try {
+    const session = res.locals.shopify.session;
+    const shop = session.shop;
+
+    const dbSession = await prisma.session.findFirst({ where: { shop } });
+    const currentPlan = dbSession?.plan || "STARTER";
+
+    if (currentPlan === "STARTER") {
+      return res.status(403).json({
+        error: "UPGRADE_REQUIRED",
+        message: "AI Curation is locked under the STARTER plan. Please upgrade to PRO or ENTERPRISE to access."
+      });
+    }
+
     const curations = await prisma.boxCuration.findMany({
       orderBy: { boxMonth: "desc" }
     });
@@ -213,9 +312,22 @@ app.post("/api/admin/curations/:id/accept", async (req, res) => {
   }
 });
 
-// GET /api/admin/inventory (Inventory Hero vs Villain metrics)
+// GET /api/admin/inventory (Inventory Hero vs Villain metrics - GATED BEHIND PRO/ENTERPRISE)
 app.get("/api/admin/inventory", async (req, res) => {
   try {
+    const session = res.locals.shopify.session;
+    const shop = session.shop;
+
+    const dbSession = await prisma.session.findFirst({ where: { shop } });
+    const currentPlan = dbSession?.plan || "STARTER";
+
+    if (currentPlan === "STARTER") {
+      return res.status(403).json({
+        error: "UPGRADE_REQUIRED",
+        message: "Inventory Retention Analytics are locked under the STARTER plan. Please upgrade to PRO or ENTERPRISE to access."
+      });
+    }
+
     const analytics = await prisma.inventoryAnalytics.findMany({
       orderBy: { retentionValue: "desc" }
     });
@@ -225,14 +337,19 @@ app.get("/api/admin/inventory", async (req, res) => {
   }
 });
 
-// POST /api/admin/curations/create-sample-data (Initial populator for dashboard demonstration)
+// POST /api/admin/curations/create-sample-data (Initial populator for sandbox testing)
 app.post("/api/admin/curations/create-sample-data", async (req, res) => {
   try {
     const session = res.locals.shopify.session;
     const shop = session.shop;
 
+    // Purge existing data to avoid primary key constraints
+    await prisma.customerProfile.deleteMany({ where: { shop } });
+    await prisma.boxCuration.deleteMany({});
+    await prisma.inventoryAnalytics.deleteMany({});
+
     // 1. Create Sample Profiles & Risks
-    const profile1 = await prisma.customerProfile.create({
+    await prisma.customerProfile.create({
       data: {
         customerId: "gid://shopify/Customer/1001",
         shop,
@@ -259,7 +376,7 @@ app.post("/api/admin/curations/create-sample-data", async (req, res) => {
       }
     });
 
-    const profile2 = await prisma.customerProfile.create({
+    await prisma.customerProfile.create({
       data: {
         customerId: "gid://shopify/Customer/1002",
         shop,
@@ -304,7 +421,7 @@ app.post("/api/admin/curations/create-sample-data", async (req, res) => {
     await prisma.inventoryAnalytics.createMany({
       data: [
         {
-          productId: "gid://shopify/Product/9001",
+          productId: "Vitamin C Serum (9001)",
           retentionValue: 84.6,
           returnRate: 2.1,
           satisfaction: 4.8,
@@ -313,7 +430,7 @@ app.post("/api/admin/curations/create-sample-data", async (req, res) => {
           stockRisk: "LOW"
         },
         {
-          productId: "gid://shopify/Product/9002",
+          productId: "Charcoal Face Mask (9002)",
           retentionValue: 14.2,
           returnRate: 35.8,
           satisfaction: 2.3,
@@ -446,6 +563,27 @@ app.get("/", (req, res) => {
       color: #202223;
       font-weight: 600;
     }
+    .paywall-locked {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 60px 20px;
+      text-align: center;
+    }
+    .paywall-title {
+      font-size: 20px;
+      font-weight: bold;
+      color: #202223;
+      margin-top: 16px;
+      margin-bottom: 8px;
+    }
+    .paywall-desc {
+      font-size: 14px;
+      color: #6d7175;
+      max-width: 480px;
+      margin-bottom: 24px;
+    }
   </style>
 </head>
 <body>
@@ -461,6 +599,7 @@ app.get("/", (req, res) => {
 
     function App() {
       const [activeTab, setActiveTab] = React.useState("churn");
+      const [plan, setPlan] = React.useState("STARTER");
       const [metrics, setMetrics] = React.useState({ atRisk: 1, loyal: 1, dormant: 0, highValue: 0, totalCount: 2 });
       const [profiles, setProfiles] = React.useState([
         {
@@ -516,18 +655,7 @@ app.get("/", (req, res) => {
         .then(res => res.json())
         .then(data => {
           setNotification("Sample Beauty subscription data loaded successfully!");
-          fetch("/api/admin/customer-profiles")
-            .then(r => r.json())
-            .then(p => { if (p && p.length > 0) setProfiles(p); });
-          fetch("/api/admin/churn-prediction")
-            .then(r => r.json())
-            .then(d => { if (d && d.summary) setMetrics(d.summary); });
-          fetch("/api/admin/curations")
-            .then(r => r.json())
-            .then(c => { if (c && c.length > 0) setCurations(c); });
-          fetch("/api/admin/inventory")
-            .then(r => r.json())
-            .then(i => { if (i && i.length > 0) setInventory(i); });
+          refreshAllData();
         })
         .catch(err => console.error("Error seeding data:", err));
       };
@@ -559,40 +687,99 @@ app.get("/", (req, res) => {
             priceSensitivity: quizPrice
           })
         })
-        .then(res => res.json())
+        .then(res => {
+          if (res.status === 403) {
+            return res.json().then(err => { throw new Error(err.message); });
+          }
+          return res.json();
+        })
         .then(profile => {
           setNotification("Preference quiz profile saved successfully to database!");
-          setProfiles([...profiles, { ...profile, churnRisk: { riskScore: 5.0, status: "LOYAL", flaggedReasons: [] }, subscription: { tier: "STARTER", status: "ACTIVE" } }]);
+          refreshAllData();
+        })
+        .catch(err => {
+          setNotification("⚠️ Error saving profile: " + err.message);
         });
       };
 
-      React.useEffect(() => {
+      const handleUpgradeBilling = (targetPlan) => {
+        fetch("/api/admin/billing", {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ plan: targetPlan })
+        })
+        .then(res => res.json())
+        .then(data => {
+          if (data.success) {
+            setPlan(data.plan);
+            setNotification("Plan upgraded successfully to " + data.plan + "!");
+            refreshAllData();
+          }
+        })
+        .catch(err => console.error("Billing upgrade failed:", err));
+      };
+
+      const refreshAllData = () => {
         fetch("/api/admin/customer-profiles")
           .then(res => res.json())
-          .then(data => { if (data && data.length > 0) setProfiles(data); })
+          .then(data => {
+            if (data && data.profiles) setProfiles(data.profiles);
+            if (data && data.plan) setPlan(data.plan);
+          })
           .catch(() => {});
         fetch("/api/admin/churn-prediction")
           .then(res => res.json())
-          .then(data => { if (data && data.summary) setMetrics(data.summary); })
+          .then(data => {
+            if (data && data.summary) setMetrics(data.summary);
+            if (data && data.plan) setPlan(data.plan);
+          })
           .catch(() => {});
         fetch("/api/admin/curations")
-          .then(res => res.json())
+          .then(res => {
+            if (res.status === 403) return [];
+            return res.json();
+          })
           .then(data => { if (data && data.length > 0) setCurations(data); })
           .catch(() => {});
         fetch("/api/admin/inventory")
-          .then(res => res.json())
+          .then(res => {
+            if (res.status === 403) return [];
+            return res.json();
+          })
           .then(data => { if (data && data.length > 0) setInventory(data); })
           .catch(() => {});
+      };
+
+      React.useEffect(() => {
+        refreshAllData();
       }, []);
 
       const renderHeader = () => {
-        return e("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "20px" } },
-          e("div", null,
-            e("h1", { style: { fontSize: "24px", fontWeight: "600", margin: 0 } }, "Beauty Subscription Optimizer"),
-            e("p", { style: { color: "#6d7175", margin: "4px 0 0 0" } }, "Predict churn, optimize curation, and maximize subscriber LTV with AI.")
+        return e("div", null,
+          e("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "20px" } },
+            e("div", null,
+              e("h1", { style: { fontSize: "24px", fontWeight: "600", margin: 0 } }, "Beauty Subscription Optimizer"),
+              e("p", { style: { color: "#6d7175", margin: "4px 0 0 0" } }, "Predict churn, optimize curation, and maximize subscriber LTV with AI.")
+            ),
+            e("div", { style: { display: "flex", gap: "8px" } },
+              e("button", { className: "button-secondary", onClick: triggerSampleSeeding }, "Seed Demo Data")
+            )
           ),
-          e("div", null,
-            e("button", { className: "button-secondary", onClick: triggerSampleSeeding }, "Seed Demo Data")
+          // Billing paywall notification banner
+          e("div", { className: "card", style: { backgroundColor: "#f0f4ff", border: "1px solid #1c3d5a", display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 16px" } },
+            e("div", null,
+              e("span", { style: { fontWeight: "bold" } }, "Merchant Subscription Plan: "),
+              e("span", { className: "badge", style: { backgroundColor: plan === "STARTER" ? "#e2e8f0" : (plan === "PRO" ? "#feebc8" : "#e0f2fe"), color: plan === "STARTER" ? "#4a5568" : (plan === "PRO" ? "#c05621" : "#2b6cb0") } }, plan),
+              e("span", { style: { marginLeft: "12px", fontSize: "13px", color: "#6d7175" } },
+                plan === "STARTER" ? "Unique Customers capped at 2,000. AI Curation and Inventory Locked." :
+                (plan === "PRO" ? "Unique Customers capped at 20,000. All standard optimization modules active." : "Enterprise Tier: Unlimited scale, high-performance models active.")
+              )
+            ),
+            e("div", { style: { display: "flex", gap: "8px" } },
+              plan === "STARTER" && e("button", { className: "button-primary", onClick: () => handleUpgradeBilling("PRO") }, "Upgrade to Pro ($800/mo)"),
+              plan === "PRO" && e("button", { className: "button-primary", onClick: () => handleUpgradeBilling("ENTERPRISE") }, "Go Enterprise ($2k/mo)"),
+              plan !== "STARTER" && e("button", { className: "button-secondary", onClick: () => handleUpgradeBilling("STARTER") }, "Downgrade to Starter")
+            )
           )
         );
       };
@@ -664,6 +851,15 @@ app.get("/", (req, res) => {
       };
 
       const renderCurationTab = () => {
+        if (plan === "STARTER") {
+          return e("div", { className: "card paywall-locked" },
+            e("div", { style: { fontSize: "40px" } }, "🔒"),
+            e("div", { className: "paywall-title" }, "AI Curation Suggestions Locked"),
+            e("div", { className: "paywall-desc" }, "The Predictive Curation Engine is a Premium module that automatically matches subscribers skin profiles, ratings, and repeat margins. Upgrade to the Pro or Enterprise plan to unlock instant curations!"),
+            e("button", { className: "button-primary", onClick: () => handleUpgradeBilling("PRO") }, "Upgrade to PRO Plan")
+          );
+        }
+
         return e("div", null,
           e("div", { className: "card" },
             e("h3", { style: { fontSize: "16px", fontWeight: "600", marginBottom: "12px" } }, "AI-Curated Box Suggestions (Next Cycle)"),
@@ -708,6 +904,15 @@ app.get("/", (req, res) => {
       };
 
       const renderInventoryTab = () => {
+        if (plan === "STARTER") {
+          return e("div", { className: "card paywall-locked" },
+            e("div", { style: { fontSize: "40px" } }, "🔒"),
+            e("div", { className: "paywall-title" }, "Inventory Retention Analytics Locked"),
+            e("div", { className: "paywall-desc" }, "Identify product retention metrics and discover stock risks instantly. Upgrade your merchant account plan to PRO or ENTERPRISE to access real-time inventory performance insights!"),
+            e("button", { className: "button-primary", onClick: () => handleUpgradeBilling("PRO") }, "Upgrade to PRO Plan")
+          );
+        }
+
         return e("div", null,
           e("div", { className: "card" },
             e("h3", { style: { fontSize: "16px", fontWeight: "600", marginBottom: "12px" } }, "Product Retention vs Villain Analysis"),
@@ -779,15 +984,17 @@ app.get("/", (req, res) => {
 
       return e("div", null,
         renderHeader(),
-        notification && e("div", { className: "card", style: { backgroundColor: "#e2f1e8", color: "#1e5128", border: "1px solid #b8dfc4", display: "flex", justifyContent: "space-between" } },
+        notification && e("div", { className: "card", style: { marginTop: "16px", backgroundColor: "#e2f1e8", color: "#1e5128", border: "1px solid #b8dfc4", display: "flex", justifyContent: "space-between" } },
           e("span", null, notification),
           e("span", { style: { cursor: "pointer", fontWeight: "bold" }, onClick: () => setNotification(null) }, "✕")
         ),
-        renderTabs(),
-        activeTab === "churn" && renderChurnTab(),
-        activeTab === "curation" && renderCurationTab(),
-        activeTab === "inventory" && renderInventoryTab(),
-        activeTab === "quiz" && renderQuizTab()
+        e("div", { style: { marginTop: "20px" } },
+          renderTabs(),
+          activeTab === "churn" && renderChurnTab(),
+          activeTab === "curation" && renderCurationTab(),
+          activeTab === "inventory" && renderInventoryTab(),
+          activeTab === "quiz" && renderQuizTab()
+        )
       );
     }
 

@@ -2,7 +2,7 @@
 
 client_id = "dummy-beauty-client-id-xyz"
 name = "Beauty Subscription Optimizer"
-application_url = "https://beauty-subscription-optimizer.vercel.app"
+application_url = "https://glow-retention-git-develop-willowsoftstudio-5437s-projects.vercel.app"
 embedded = true
 
 [build]
@@ -20,7 +20,7 @@ scopes = "write_products,read_products,write_customers,read_customers,write_draf
 
 [auth]
 redirect_urls = [
-  "https://beauty-subscription-optimizer.vercel.app/api/auth/callback"
+  "https://glow-retention-git-develop-willowsoftstudio-5437s-projects.vercel.app/api/auth/callback"
 ]
 
 # ==============================================================================
@@ -38,7 +38,7 @@ redirect_urls = [
 # - This app handles Protected Customer Data (PCD) such as names and emails to audit churn risk.
 # - Required Access Scopes: write_products, read_products, write_customers, read_customers, read_orders.
 # - GDPR Webhooks (`/api/webhooks/compliance`):
-#   - `customers/redact`: Instantly deletes the customer's profile, triggering a cascade purge 
+#   - `customers/redact`: Instantly deletes the customer's profile, triggering a cascade purge
 #     of their subscription data, churn risk scores, retention workflows, and referral records.
 #   - `shop/redact`: Deletes all customer profiles and session tokens associated with the merchant.
 #
@@ -49,7 +49,7 @@ redirect_urls = [
 #    👉 pnpm --filter beauty-subscription-optimizer db:push
 # 3. Boot the local development server:
 #    👉 pnpm --filter beauty-subscription-optimizer start
-# 4. Open the App Dashboard, click "Seed Demo Data" to populate mock subscribers, 
+# 4. Open the App Dashboard, click "Seed Demo Data" to populate mock subscribers,
 #    and try out the interactive billing tier gating (Starter vs Pro vs Enterprise).
 #
 # 🚨 COMMON DEPLOYMENT ERRORS & SOLUTIONS:
