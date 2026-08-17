@@ -1,0 +1,121 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model Session {
+  id                  String    @id
+  shop                String
+  state               String
+  isOnline            Boolean   @default(false)
+  isPremium           Boolean   @default(false)
+  plan                String    @default("STARTER") // "STARTER", "PRO", "ENTERPRISE"
+  scope               String?
+  expires             DateTime?
+  accessToken         String
+  userId              BigInt?
+  firstName           String?
+  lastName            String?
+  email               String?
+  accountOwner        Boolean?
+  locale              String?
+  collaborator        Boolean?
+  emailVerified       Boolean?
+  refreshToken        String?
+  refreshTokenExpires DateTime?
+}
+
+model CustomerProfile {
+  id                  String              @id @default(uuid())
+  customerId          String              // Shopify Customer GID
+  shop                String              // Associated merchant shop domain
+  name                String?
+  email               String?
+  skinType            String?             // e.g., "dry", "oily", "sensitive"
+  concerns            String[]            // e.g., ["acne", "aging", "redness"]
+  fragrancePreference String?             // e.g., "floral", "none"
+  priceSensitivity    String?             // e.g., "high", "medium", "low"
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+
+  subscription        SubscriptionData?
+  churnRisk           ChurnRisk?
+  retentionWorkflows  RetentionWorkflow[]
+  referrals           Referral[]          @relation("Referrer")
+
+  @@index([customerId])
+  @@index([shop])
+}
+
+model SubscriptionData {
+  id                String          @id @default(uuid())
+  customerProfileId String          @unique
+  customerProfile   CustomerProfile @relation(fields: [customerProfileId], references: [id], onDelete: Cascade)
+  status            String          @default("ACTIVE") // "ACTIVE", "PAUSED", "CANCELLED"
+  tier              String          @default("STARTER") // "STARTER", "PRO", "ENTERPRISE"
+  skipCount         Int             @default(0)
+  pauseCount        Int             @default(0)
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+}
+
+model ChurnRisk {
+  id                String          @id @default(uuid())
+  customerProfileId String          @unique
+  customerProfile   CustomerProfile @relation(fields: [customerProfileId], references: [id], onDelete: Cascade)
+  riskScore         Float           @default(0.0) // 0 to 100
+  flaggedReasons    String[]        // e.g., ["skipped last 2 boxes", "low email engagement"]
+  status            String          @default("LOYAL") // "AT_RISK", "LOYAL", "DORMANT", "HIGH_VALUE"
+  calculatedAt      DateTime        @default(now())
+}
+
+model RetentionWorkflow {
+  id                String          @id @default(uuid())
+  customerProfileId String
+  customerProfile   CustomerProfile @relation(fields: [customerProfileId], references: [id], onDelete: Cascade)
+  templateName      String          // e.g., "We miss you", "Early skip incentive"
+  status            String          @default("SENT") // "SENT", "OPENED", "CLICKED", "CONVERTED"
+  offerApplied      String?         // e.g., "10% off"
+  triggeredAt       DateTime        @default(now())
+
+  @@index([customerProfileId])
+}
+
+model BoxCuration {
+  id               String      @id @default(uuid())
+  subscriptionTier String      // "STARTER", "PRO", "ENTERPRISE"
+  boxMonth         String      // e.g., "2026-09"
+  suggestedItems   Json        // Array of suggested items { variantId, score, reason }
+  acceptedItems    Json?       // Array of chosen items { variantId }
+  status           String      @default("SUGGESTED") // "SUGGESTED", "ACCEPTED", "SHIPPED"
+  margin           Float?
+  createdAt        DateTime    @default(now())
+}
+
+model InventoryAnalytics {
+  id             String      @id @default(uuid())
+  productId      String      @unique // Shopify Product GID
+  retentionValue Float       @default(0.0) // Percentage of customers reordering
+  returnRate     Float       @default(0.0)
+  satisfaction   Float       @default(0.0) // Avg product rating
+  margin         Float       @default(0.0)
+  stockLevel     Int         @default(0)
+  stockRisk      String      @default("LOW") // "LOW", "MEDIUM", "HIGH"
+  updatedAt      DateTime    @updatedAt
+}
+
+model Referral {
+  id                String          @id @default(uuid())
+  referrerId        String
+  referrer          CustomerProfile @relation("Referrer", fields: [referrerId], references: [id], onDelete: Cascade)
+  friendName        String?
+  status            String          @default("SENT") // "SENT", "CONVERTED"
+  rewardStatus      String          @default("PENDING") // "PENDING", "CLAIMED"
+  createdAt         DateTime        @default(now())
+
+  @@index([referrerId])
+}

@@ -1,0 +1,35 @@
+{
+  "name": "beauty-subscription-optimizer",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "start": "NODE_OPTIONS='--max-http-header-size=32768' tsx web/backend/index.ts",
+    "test": "vitest run --passWithNoTests",
+    "test:coverage": "vitest run --coverage",
+    "test:e2e": "playwright test",
+    "build": "node scripts/build.cjs",
+    "postinstall": "node scripts/postinstall.cjs",
+    "db:push": "prisma db push",
+    "db:seed": "prisma db seed",
+    "deploy": "node scripts/deploy.cjs",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.19.3",
+    "@shopify/shopify-api": "^11.14.1",
+    "@shopify/shopify-app-express": "^5.0.20",
+    "@shopify/shopify-app-session-storage-prisma": "^10.0.0",
+    "@shopify/shopify_function": "~2.0.1",
+    "express": "^4.19.2",
+    "prisma": "^6.19.3"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.62.1",
+    "@shopify/cli": "^4.6.1",
+    "@types/express": "^4.17.21",
+    "@types/node": "^20.14.2",
+    "tsx": "^4.15.5",
+    "typescript": "^5.4.5",
+    "vitest": "^1.6.0"
+  }
+}

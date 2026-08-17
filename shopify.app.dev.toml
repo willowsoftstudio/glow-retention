@@ -1,0 +1,64 @@
+# Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
+
+client_id = "dummy-beauty-client-id-xyz"
+name = "Beauty Subscription Optimizer (Dev)"
+application_url = "https://beauty-subscription-optimizer-dev.vercel.app"
+embedded = true
+
+[build]
+automatically_update_urls_on_dev = true
+
+[webhooks]
+api_version = "2026-10"
+
+[[webhooks.subscriptions]]
+topics = [ "orders/create" ]
+uri = "/api/webhooks/orders-create"
+
+[access_scopes]
+scopes = "write_products,read_products,write_customers,read_customers,write_draft_orders,write_validations,read_validations,read_orders"
+
+[auth]
+redirect_urls = [
+  "https://beauty-subscription-optimizer-dev.vercel.app/api/auth/callback"
+]
+
+# ==============================================================================
+# 💄 BEAUTY SUBSCRIPTION OPTIMIZER — PRODUCTION DEPLOYMENT, SECURITY, & GDPR GUIDE
+# ==============================================================================
+#
+# 🔑 PAYWALL & BILLING GATING:
+# - **STARTER ($300/mo)**: Limit of 2,000 unique customer profiles. Features: Churn Prediction.
+#   AI Box Curation and Inventory Analytics are strictly locked/gated under this tier.
+# - **PRO ($800/mo)**: Limit of 20,000 unique customer profiles. All features unlocked (Curation, Inventory).
+# - **ENTERPRISE ($2,000/mo)**: Unlimited customer profiles, custom model training, and premium features.
+# - Plan transitions are managed securely via `/api/admin/billing` patch operations.
+#
+# 🔒 PRIVACY & SECURITY COMPLIANCE (GDPR / PCD):
+# - This app handles Protected Customer Data (PCD) such as names and emails to audit churn risk.
+# - Required Access Scopes: write_products, read_products, write_customers, read_customers, read_orders.
+# - GDPR Webhooks (`/api/webhooks/compliance`):
+#   - `customers/redact`: Instantly deletes the customer's profile, triggering a cascade purge 
+#     of their subscription data, churn risk scores, retention workflows, and referral records.
+#   - `shop/redact`: Deletes all customer profiles and session tokens associated with the merchant.
+#
+# 🛠️ HOW TO USE & ACTIVATE THE APP:
+# 1. Install workspace dependencies and link the app:
+#    👉 pnpm install
+# 2. Sync and migrate your PostgreSQL schema:
+#    👉 pnpm --filter beauty-subscription-optimizer db:push
+# 3. Boot the local development server:
+#    👉 pnpm --filter beauty-subscription-optimizer start
+# 4. Open the App Dashboard, click "Seed Demo Data" to populate mock subscribers, 
+#    and try out the interactive billing tier gating (Starter vs Pro vs Enterprise).
+#
+# 🚨 COMMON DEPLOYMENT ERRORS & SOLUTIONS:
+#
+# 🟥 ERROR: "Billing transition failed: PrismaClientKnownRequestError"
+# 🔍 Why: The session table was queried but the active session ID was missing or mismatched.
+# ✅ Solve: Verify the merchant is logged in and App Bridge has initialized a valid session context.
+#
+# 🟥 ERROR: "403: LIMIT_REACHED"
+# 🔍 Why: The merchant is on the Starter or Pro plan and has reached their unique customer profile limit.
+# ✅ Solve: Present the Polaris upgrade paywall banner and let them upgrade to the next tier.
+# ==============================================================================
