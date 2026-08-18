@@ -479,7 +479,14 @@ app.get("/", (req, res) => {
       const urlParams = new URLSearchParams(window.location.search);
       const shop = urlParams.get("shop");
       const host = urlParams.get("host");
-      
+
+      if (window.top === window.self && shop) {
+        const shopName = shop.split(".")[0];
+        console.warn("[Glow Retention] App accessed outside iframe. Redirecting to Shopify Admin...");
+        window.location.href = "https://admin.shopify.com/store/" + shopName + "/apps/${apiKey}";
+        return;
+      }
+
       if (window.top !== window.self && !host && shop) {
         const shopName = shop.split(".")[0];
         console.warn("[Glow Retention] Missing critical 'host' parameter inside iframe. Forcing self-healing redirect to Shopify Admin...");
@@ -612,6 +619,18 @@ app.get("/", (req, res) => {
     const e = React.createElement;
 
     function App() {
+      const [appBridgeReady, setAppBridgeReady] = React.useState(false);
+
+      React.useEffect(() => {
+        if (window.shopify && window.shopify.ready) {
+          window.shopify.ready.then(() => {
+            setAppBridgeReady(true);
+          });
+        } else {
+          setAppBridgeReady(true);
+        }
+      }, []);
+
       const [activeTab, setActiveTab] = React.useState("churn");
       const [plan, setPlan] = React.useState("STARTER");
       const [metrics, setMetrics] = React.useState({ atRisk: 1, loyal: 1, dormant: 0, highValue: 0, totalCount: 2 });
@@ -765,8 +784,10 @@ app.get("/", (req, res) => {
       };
 
       React.useEffect(() => {
-        refreshAllData();
-      }, []);
+        if (appBridgeReady) {
+          refreshAllData();
+        }
+      }, [appBridgeReady]);
 
       const renderHeader = () => {
         return e("div", null,
