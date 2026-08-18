@@ -622,13 +622,31 @@ app.get("/", (req, res) => {
       const [appBridgeReady, setAppBridgeReady] = React.useState(false);
 
       React.useEffect(() => {
-        if (window.shopify && window.shopify.ready) {
-          window.shopify.ready.then(() => {
-            setAppBridgeReady(true);
-          });
-        } else {
-          setAppBridgeReady(true);
+        const isEmbedded = window.top !== window.self || !!window.shopify;
+        if (!isEmbedded) {
+          console.warn("[Glow Retention] App is running outside Shopify Admin. Deferring API fetches.");
+          return;
         }
+
+        let attempts = 0;
+        const interval = setInterval(() => {
+          attempts++;
+          if (window.shopify) {
+            clearInterval(interval);
+            if (window.shopify.ready) {
+              window.shopify.ready.then(() => {
+                setAppBridgeReady(true);
+              });
+            } else {
+              setAppBridgeReady(true);
+            }
+          } else if (attempts > 100) {
+            clearInterval(interval);
+            console.error("[Glow Retention] Shopify App Bridge failed to load.");
+          }
+        }, 50);
+
+        return () => clearInterval(interval);
       }, []);
 
       const [activeTab, setActiveTab] = React.useState("churn");
