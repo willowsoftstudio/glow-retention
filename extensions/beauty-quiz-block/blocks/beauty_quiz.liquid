@@ -5,35 +5,85 @@
   and global click listeners for custom links (e.g. any link with class "beauty-quiz-trigger" or href="#beauty-quiz").
 {% endcomment %}
 
-{% assign is_inline = false %}
 {% if block.settings.embed_layout == 'inline' %}
   {% assign is_inline = true %}
-  {% assign container_style = "position: relative; display: block; background: #ffffff; width: 100%; max-width: 650px; margin: 40px auto; padding: 30px; border-radius: 12px; box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08); z-index: 1;" %}
+  {% assign modal_position_style = "position: relative; display: block; background: none; width: 100%; height: auto; box-shadow: none; z-index: 1;" %}
+  
+  {% case block.settings.columns_desktop %}
+    {% when '1' %}
+      {% assign max_card_width = "500px" %}
+    {% when '2' %}
+      {% assign max_card_width = "800px" %}
+    {% when '3' %}
+      {% assign max_card_width = "1100px" %}
+  {% endcase %}
+
+  {% assign card_container_style = "background-color: #fff; padding: 30px; border-radius: 12px; width: 100%; max-width: " | append: max_card_width | append: "; margin: 0 auto; box-shadow: none; border: 1px solid #e1e3e5; position: relative;" %}
+  {% assign close_button_style = "display: none;" %}
+  {% assign trigger_button_style = "display: none;" %}
 {% else %}
-  {% assign container_style = "display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 999999; justify-content: center; align-items: center;" %}
+  {% assign is_inline = false %}
+  {% assign modal_position_style = "position: fixed; display: none; top: 0; left: 0; width: 100vw; height: 100vh; background-color: rgba(0, 0, 0, 0.6); z-index: 2147483647; align-items: center; justify-content: center; backdrop-filter: blur(4px);" %}
+  {% assign card_container_style = "background-color: #fff; padding: 30px; border-radius: 16px; width: 90%; max-width: 500px; box-shadow: 0 20px 40px rgba(0,0,0,0.3); position: relative; max-height: 90vh; overflow-y: auto;" %}
+  {% assign close_button_style = "display: block; position: absolute; top: 20px; right: 20px; background: none; border: none; font-size: 22px; cursor: pointer; color: #6d7175; font-weight: bold; transition: color 0.2s;" %}
+  {% if block.settings.display_mode == 'popup' %}
+    {% assign trigger_button_style = "display: none;" %}
+  {% else %}
+    {% assign trigger_button_style = "display: inline-block;" %}
+  {% endif %}
 {% endif %}
+
+{% case block.settings.button_size %}
+  {% when 'small' %}
+    {% assign btn_padding = "10px 20px" %}
+    {% assign btn_font_size = "14px" %}
+  {% when 'medium' %}
+    {% assign btn_padding = "14px 28px" %}
+    {% assign btn_font_size = "16px" %}
+  {% when 'large' %}
+    {% assign btn_padding = "18px 36px" %}
+    {% assign btn_font_size = "18px" %}
+{% endcase %}
+
+{% case block.settings.button_alignment %}
+  {% when 'left' %}
+    {% assign wrapper_alignment = "text-align: left;" %}
+  {% when 'center' %}
+    {% assign wrapper_alignment = "text-align: center;" %}
+  {% when 'right' %}
+    {% assign wrapper_alignment = "text-align: right;" %}
+{% endcase %}
 
 <!-- Trigger Button (Only rendered if layout is Modal and display mode is Button or Both) -->
 {% if is_inline == false and block.settings.display_mode != 'popup' %}
-  <div class="beauty-quiz-trigger-wrapper" style="text-align: center; margin: 20px auto;">
-    <button id="beauty-quiz-trigger" class="beauty-quiz-button-primary">
+  <div class="beauty-quiz-trigger-wrapper" style="margin: 30px 0; {{ wrapper_alignment }} {{ trigger_button_style }} width: 100%;">
+    <button id="beauty-quiz-trigger" style="
+      padding: {{ btn_padding }};
+      font-size: {{ btn_font_size }};
+      background-color: {{ block.settings.button_bg_color | default: '#000000' }};
+      color: {{ block.settings.button_text_color | default: '#ffffff' }};
+      border: none;
+      border-radius: 8px;
+      font-weight: bold;
+      cursor: pointer;
+      box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+      transition: transform 0.2s, opacity 0.2s;
+    " onmouseover="this.style.opacity='0.9'" onmouseout="this.style.opacity='1'">
       ✨ Take Our AI Beauty Quiz
     </button>
   </div>
 {% endif %}
 
 <!-- Main Quiz Container (Modal Overlay or Inline Container) -->
-<div class="beauty-quiz-modal-overlay" id="beauty-quiz-modal" style="{{ container_style }}">
-  <div class="beauty-quiz-card" style="position: relative; background: #ffffff; max-width: 600px; width: 100%; max-height: 90vh; overflow-y: auto; border-radius: 12px; padding: 30px; box-shadow: 0 10px 40px rgba(0,0,0,0.15);">
+<div id="beauty-quiz-modal" class="beauty-portal-container-wrapper" style="{{ modal_position_style }}">
+  <div class="beauty-quiz-card" style="{{ card_container_style }} font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">
     
     <!-- Close Button (Only for Modal layout) -->
-    {% if is_inline == false %}
-      <button id="beauty-quiz-close" class="beauty-quiz-close-btn" aria-label="Close Quiz">✕</button>
-    {% endif %}
+    <button id="beauty-quiz-close" style="{{ close_button_style }}" onmouseover="this.style.color='#000'" onmouseout="this.style.color='#6d7175'">✕</button>
 
     <div class="beauty-quiz-header">
-      <h2>💄 Discover Your Custom Beauty Ritual</h2>
-      <p>Tell us about your skin, hair, and lifestyle preferences. Our AI will curate your monthly subscription box with perfect-match ingredients!</p>
+      <h2 style="margin-top: 0; margin-bottom: 8px; font-size: 22px; color: {{ block.settings.button_bg_color | default: '#000000' }}; font-weight: bold;">Discover Your Custom Beauty Ritual 💄</h2>
+      <p style="margin: 0 0 20px 0; font-size: 14px; color: #6d7175; line-height: 1.4;">Tell us about your skin, hair, and lifestyle preferences. Our AI will curate your monthly subscription box with perfect-match ingredients!</p>
     </div>
 
     <div id="beauty-quiz-success-msg" class="beauty-quiz-success-alert" style="display: none;">
@@ -43,172 +93,143 @@
     <form id="beauty-quiz-form" onsubmit="submitBeautyQuiz(event)">
       <!-- Section 1: Skin Diagnostics -->
       <div class="beauty-quiz-section">
-        <h3>✨ 1. Skin & Fragrance Profile</h3>
+        <h3 style="margin-top: 0; margin-bottom: 12px; font-size: 15px; font-weight: 600; color: #1c1d1f; border-bottom: 1px solid #f1f2f4; padding-bottom: 8px;">✨ 1. Skin & Fragrance Profile</h3>
         
-        <div class="form-group">
-          <label for="beauty-skin-type">Skin Type</label>
-          <select id="beauty-skin-type" name="skinType" required>
-            <option value="dry">Dry / Dehydrated</option>
-            <option value="oily">Oily / Acne-Prone</option>
-            <option value="sensitive">Sensitive / Redness-Prone</option>
-            <option value="combination" selected>Combination</option>
-          </select>
-        </div>
-
-        <div class="form-group">
-          <label for="beauty-skin-concerns">Primary Skin Concerns (Select all that apply)</label>
-          <div class="checkbox-grid">
-            <label class="checkbox-label"><input type="checkbox" name="concerns" value="aging"> Anti-Aging</label>
-            <label class="checkbox-label"><input type="checkbox" name="concerns" value="acne"> Acne & Blemishes</label>
-            <label class="checkbox-label"><input type="checkbox" name="concerns" value="dryness" checked> Dryness & Dehydration</label>
-            <label class="checkbox-label"><input type="checkbox" name="concerns" value="redness"> Redness & Sensitivity</label>
-            <label class="checkbox-label"><input type="checkbox" name="concerns" value="dullness"> Dullness & Dark Spots</label>
+        <div class="beauty-quiz-fields-grid columns-{{ block.settings.columns_desktop | default: '1' }}">
+          <div class="form-group">
+            <label for="beauty-skin-type">Skin Type</label>
+            <select id="beauty-skin-type" name="skinType" required>
+              <option value="dry">Dry / Dehydrated</option>
+              <option value="oily">Oily / Acne-Prone</option>
+              <option value="sensitive">Sensitive / Redness-Prone</option>
+              <option value="combination" selected>Combination</option>
+            </select>
           </div>
-        </div>
 
-        <div class="form-group">
-          <label for="beauty-fragrance">Fragrance Preference</label>
-          <select id="beauty-fragrance" name="fragrancePreference" required>
-            <option value="floral">Floral / Sweet</option>
-            <option value="citrus" selected>Citrus / Fresh</option>
-            <option value="none">Unscented / No Fragrance</option>
-          </select>
-        </div>
+          <div class="form-group" style="grid-column: span {{ block.settings.columns_desktop | default: '1' }};">
+            <label for="beauty-skin-concerns">Primary Skin Concerns (Select all that apply)</label>
+            <div class="checkbox-grid">
+              <label class="checkbox-label"><input type="checkbox" name="concerns" value="aging"> Anti-Aging</label>
+              <label class="checkbox-label"><input type="checkbox" name="concerns" value="acne"> Acne & Blemishes</label>
+              <label class="checkbox-label"><input type="checkbox" name="concerns" value="dryness" checked> Dryness & Dehydration</label>
+              <label class="checkbox-label"><input type="checkbox" name="concerns" value="redness"> Redness & Sensitivity</label>
+              <label class="checkbox-label"><input type="checkbox" name="concerns" value="dullness"> Dullness & Dark Spots</label>
+            </div>
+          </div>
 
-        <div class="form-group">
-          <label for="beauty-price">Budget / Price Sensitivity</label>
-          <select id="beauty-price" name="priceSensitivity" required>
-            <option value="low">Value-Driven (Low)</option>
-            <option value="medium" selected>Balanced (Medium)</option>
-            <option value="high">Luxury / Premium (High)</option>
-          </select>
+          <div class="form-group">
+            <label for="beauty-fragrance">Fragrance Preference</label>
+            <select id="beauty-fragrance" name="fragrancePreference" required>
+              <option value="floral">Floral / Sweet</option>
+              <option value="citrus" selected>Citrus / Fresh</option>
+              <option value="none">Unscented / No Fragrance</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label for="beauty-price">Budget / Price Sensitivity</label>
+            <select id="beauty-price" name="priceSensitivity" required>
+              <option value="low">Value-Driven (Low)</option>
+              <option value="medium" selected>Balanced (Medium)</option>
+              <option value="high">Luxury / Premium (High)</option>
+            </select>
+          </div>
         </div>
       </div>
 
       <!-- Section 2: Advanced Diagnostics -->
       <div class="beauty-quiz-section" style="border-bottom: none; margin-bottom: 10px;">
-        <h3>🌿 2. Personalization & Lifestyle Preferences</h3>
+        <h3 style="margin-top: 0; margin-bottom: 12px; font-size: 15px; font-weight: 600; color: #1c1d1f; border-bottom: 1px solid #f1f2f4; padding-bottom: 8px;">🌿 2. Personalization & Lifestyle Preferences</h3>
 
-        <div class="form-group">
-          <label for="beauty-categories">Preferred Product Categories</label>
-          <select id="beauty-categories" name="preferredCategories" required>
-            <option value="skincare">Skincare Only</option>
-            <option value="makeup">Makeup Only</option>
-            <option value="haircare">Haircare Only</option>
-            <option value="all" selected>A Mix of Everything</option>
-          </select>
-        </div>
+        <div class="beauty-quiz-fields-grid columns-{{ block.settings.columns_desktop | default: '1' }}">
+          <div class="form-group">
+            <label for="beauty-categories">Preferred Product Categories</label>
+            <select id="beauty-categories" name="preferredCategories" required>
+              <option value="skincare">Skincare Only</option>
+              <option value="makeup">Makeup Only</option>
+              <option value="haircare">Haircare Only</option>
+              <option value="all" selected>A Mix of Everything</option>
+            </select>
+          </div>
 
-        <div class="form-group">
-          <label for="beauty-ethical">Ethical & Ingredient Preferences</label>
-          <select id="beauty-ethical" name="ethicalPreferences" required>
-            <option value="cruelty-free" selected>Cruelty-Free</option>
-            <option value="vegan">Vegan Only</option>
-            <option value="organic">Clean / Organic Only</option>
-            <option value="none">No Restrictions</option>
-          </select>
-        </div>
+          <div class="form-group">
+            <label for="beauty-ethical">Ethical & Ingredient Preferences</label>
+            <select id="beauty-ethical" name="ethicalPreferences" required>
+              <option value="cruelty-free" selected>Cruelty-Free</option>
+              <option value="vegan">Vegan Only</option>
+              <option value="organic">Clean / Organic Only</option>
+              <option value="none">No Restrictions</option>
+            </select>
+          </div>
 
-        <div class="form-group">
-          <label for="beauty-hair">Hair Type & Texture</label>
-          <select id="beauty-hair" name="hairType" required>
-            <option value="straight">Fine & Straight</option>
-            <option value="wavy" selected>Wavy / Textured</option>
-            <option value="curly">Curly</option>
-            <option value="coily">Coily / Textured</option>
-            <option value="none">Do not include Hair Products</option>
-          </select>
-        </div>
+          <div class="form-group">
+            <label for="beauty-hair">Hair Type & Texture</label>
+            <select id="beauty-hair" name="hairType" required>
+              <option value="straight">Fine & Straight</option>
+              <option value="wavy" selected>Wavy / Textured</option>
+              <option value="curly">Curly</option>
+              <option value="coily">Coily / Textured</option>
+              <option value="none">Do not include Hair Products</option>
+            </select>
+          </div>
 
-        <div class="form-group">
-          <label for="beauty-climate">Primary Local Climate</label>
-          <select id="beauty-climate" name="localClimate" required>
-            <option value="arid">Arid / Dry</option>
-            <option value="humid">Humid / Tropical</option>
-            <option value="temperate" selected>Temperate / Seasonal</option>
-            <option value="cold">Cold / Dry</option>
-          </select>
+          <div class="form-group">
+            <label for="beauty-climate">Primary Local Climate</label>
+            <select id="beauty-climate" name="localClimate" required>
+              <option value="arid">Arid / Dry</option>
+              <option value="humid">Humid / Tropical</option>
+              <option value="temperate" selected>Temperate / Seasonal</option>
+              <option value="cold">Cold / Dry</option>
+            </select>
+          </div>
         </div>
       </div>
 
-      <button type="submit" id="beauty-submit-btn" class="beauty-quiz-submit-btn">✨ Save My Beauty Profile</button>
+      <button type="submit" id="beauty-submit-btn" class="beauty-quiz-submit-btn" style="
+        background-color: {{ block.settings.button_bg_color | default: '#000000' }};
+        color: {{ block.settings.button_text_color | default: '#ffffff' }};
+      ">✨ Save My Beauty Profile</button>
     </form>
   </div>
 </div>
 
 <style>
-  .beauty-quiz-button-primary {
-    background: #000000;
-    color: #ffffff;
-    border: none;
-    padding: 14px 28px;
-    font-size: 15px;
-    font-weight: 600;
-    border-radius: 8px;
-    cursor: pointer;
-    box-shadow: 0 4px 10px rgba(0,0,0,0.1);
-    transition: background 0.2s, transform 0.15s;
+  .beauty-quiz-fields-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 12px;
   }
-  .beauty-quiz-button-primary:hover {
-    background: #2a2b2c;
-    transform: translateY(-1px);
+  @media (min-width: 768px) {
+    .beauty-quiz-fields-grid.columns-2 {
+      grid-template-columns: repeat(2, 1fr);
+    }
+    .beauty-quiz-fields-grid.columns-3 {
+      grid-template-columns: repeat(3, 1fr);
+    }
   }
-  .beauty-quiz-close-btn {
-    position: absolute;
-    top: 15px;
-    right: 20px;
-    background: none;
-    border: none;
-    font-size: 20px;
-    cursor: pointer;
-    color: #6d7175;
-  }
-  .beauty-quiz-close-btn:hover {
-    color: #000000;
-  }
+
   .beauty-quiz-card {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     color: #202223;
     animation: beautySlideIn 0.3s ease-out;
   }
   @keyframes beautySlideIn {
     from {
       opacity: 0;
-      transform: translateY(30px) scale(0.97);
+      transform: translateY(20px) scale(0.95);
     }
     to {
       opacity: 1;
       transform: translateY(0) scale(1);
     }
   }
-  .beauty-quiz-header {
-    text-align: center;
-    margin-bottom: 25px;
-  }
-  .beauty-quiz-header h2 {
-    font-size: 22px;
-    font-weight: 700;
-    margin-bottom: 10px;
-    color: #1a1c1d;
-  }
-  .beauty-quiz-header p {
-    color: #6d7175;
-    font-size: 13px;
-    line-height: 1.5;
-  }
   .beauty-quiz-section {
     margin-bottom: 20px;
-    border-bottom: 1px solid #f1f2f4;
     padding-bottom: 15px;
-  }
-  .beauty-quiz-section h3 {
-    font-size: 15px;
-    font-weight: 600;
-    margin-bottom: 12px;
-    color: #1c1d1f;
   }
   .form-group {
     margin-bottom: 14px;
+    text-align: left;
   }
   .form-group label {
     display: block;
@@ -219,11 +240,12 @@
   }
   .form-group select {
     width: 100%;
-    padding: 8px 12px;
+    padding: 10px;
     border-radius: 6px;
-    border: 1px solid #8c9196;
-    font-size: 13px;
+    border: 1px solid #c9cccf;
+    font-size: 14px;
     background-color: #ffffff;
+    box-sizing: border-box;
   }
   .checkbox-grid {
     display: grid;
@@ -245,18 +267,17 @@
   }
   .beauty-quiz-submit-btn {
     width: 100%;
-    background: #000000;
-    color: #ffffff;
     border: none;
     padding: 12px;
-    font-size: 14px;
-    font-weight: 600;
-    border-radius: 6px;
+    font-size: 15px;
+    font-weight: bold;
+    border-radius: 8px;
     cursor: pointer;
-    transition: background 0.2s;
+    box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+    transition: transform 0.2s, opacity 0.2s;
   }
   .beauty-quiz-submit-btn:hover {
-    background: #2a2b2c;
+    opacity: 0.9;
   }
   .beauty-quiz-success-alert {
     background-color: #e2f1e8;
@@ -436,6 +457,17 @@
     },
     {
       "type": "select",
+      "id": "columns_desktop",
+      "label": "Inline Grid Columns (Inline Layout only)",
+      "options": [
+        { "value": "1", "label": "1 Column" },
+        { "value": "2", "label": "2 Columns" },
+        { "value": "3", "label": "3 Columns" }
+      ],
+      "default": "1"
+    },
+    {
+      "type": "select",
       "id": "display_mode",
       "label": "Display Mode (Modal Layout only)",
       "options": [
@@ -453,6 +485,40 @@
       "max": 10,
       "step": 1,
       "default": 3
+    },
+    {
+      "type": "color",
+      "id": "button_bg_color",
+      "label": "Button / Primary Color",
+      "default": "#000000"
+    },
+    {
+      "type": "color",
+      "id": "button_text_color",
+      "label": "Button Text / Secondary Color",
+      "default": "#ffffff"
+    },
+    {
+      "type": "select",
+      "id": "button_size",
+      "label": "Button Size",
+      "options": [
+        { "value": "small", "label": "Small" },
+        { "value": "medium", "label": "Medium" },
+        { "value": "large", "label": "Large" }
+      ],
+      "default": "medium"
+    },
+    {
+      "type": "select",
+      "id": "button_alignment",
+      "label": "Button Alignment",
+      "options": [
+        { "value": "left", "label": "Align Left" },
+        { "value": "center", "label": "Align Center" },
+        { "value": "right", "label": "Align Right" }
+      ],
+      "default": "center"
     },
     {
       "type": "text",
