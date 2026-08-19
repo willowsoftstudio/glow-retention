@@ -39,6 +39,10 @@ model CustomerProfile {
   concerns            String[]            // e.g., ["acne", "aging", "redness"]
   fragrancePreference String?             // e.g., "floral", "none"
   priceSensitivity    String?             // e.g., "high", "medium", "low"
+  preferredCategories String[]            // e.g., ["skincare", "haircare", "makeup"]
+  ethicalPreferences  String[]            // e.g., ["vegan", "cruelty-free"]
+  hairType            String?             // e.g., "straight", "curly"
+  localClimate        String?             // e.g., "dry", "humid"
   createdAt           DateTime            @default(now())
   updatedAt           DateTime            @updatedAt
 

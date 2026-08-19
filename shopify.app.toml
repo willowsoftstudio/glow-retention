@@ -24,41 +24,72 @@ redirect_urls = [
 ]
 
 # ==============================================================================
-# 💄 BEAUTY SUBSCRIPTION OPTIMIZER — PRODUCTION DEPLOYMENT, SECURITY, & GDPR GUIDE
+# 💄 BEAUTY SUBSCRIPTION OPTIMIZER — COMPLETE MERCHANT & DEVELOPER MASTER GUIDE
 # ==============================================================================
 #
-# 🔑 PAYWALL & BILLING GATING:
-# - **STARTER ($300/mo)**: Limit of 2,000 unique customer profiles. Features: Churn Prediction.
-#   AI Box Curation and Inventory Analytics are strictly locked/gated under this tier.
-# - **PRO ($800/mo)**: Limit of 20,000 unique customer profiles. All features unlocked (Curation, Inventory).
-# - **ENTERPRISE ($2,000/mo)**: Unlimited customer profiles, custom model training, and premium features.
-# - Plan transitions are managed securely via `/api/admin/billing` patch operations.
+# 🌟 OVERVIEW (WHAT THIS APP DOES):
+# The Beauty Subscription Optimizer is a next-generation retention and AI-driven curation
+# engine designed to maximize subscriber lifetime value (LTV), predict churn, and deliver
+# hyper-personalized subscription boxes for Shopify beauty brands.
 #
-# 🔒 PRIVACY & SECURITY COMPLIANCE (GDPR / PCD):
-# - This app handles Protected Customer Data (PCD) such as names and emails to audit churn risk.
-# - Required Access Scopes: write_products, read_products, write_customers, read_customers, read_orders.
-# - GDPR Webhooks (`/api/webhooks/compliance`):
-#   - `customers/redact`: Instantly deletes the customer's profile, triggering a cascade purge
-#     of their subscription data, churn risk scores, retention workflows, and referral records.
-#   - `shop/redact`: Deletes all customer profiles and session tokens associated with the merchant.
+# 📦 CORE FEATURES:
+# 1. Churn Prediction Dashboard: Analyzes customer activity, skips, and open rates to predict
+#    churn risk (At Risk vs. Loyal) and triggers automated retention flows.
+# 2. AI Box Curation: Dynamically curates recommended products based on the customer's skin type,
+#    concerns, fragrance preferences, price sensitivity, category choices, ethical preferences,
+#    hair texture, and local climate. (Locked under the STARTER plan!).
+# 3. Inventory Analytics: Evaluates high-retention products, return rates, customer satisfaction,
+#    and stock risks to help merchants optimize supply chain decisions. (Locked under the STARTER plan!).
+# 4. Multi-tier Billing Paywalls: Standardizes features across three secure tiers:
+#    - STARTER ($300/mo): Gated to 2,000 unique customer profiles. AI Curation & Inventory are locked.
+#    - PRO ($800/mo): Gated to 20,000 unique customer profiles. All features fully unlocked.
+#    - ENTERPRISE ($2,000/mo): Unlimited customer profiles and premium support. All features unlocked.
+# 5. Simulated Storefront Preference Quiz: Allows customers to submit deep beauty profiles
+#    which are securely captured and stored in the PostgreSQL database.
 #
-# 🛠️ HOW TO USE & ACTIVATE THE APP:
-# 1. Install workspace dependencies and link the app:
-#    👉 pnpm install
-# 2. Sync and migrate your PostgreSQL schema:
+# 🛠️ SYSTEM ARCHITECTURE (WHERE THINGS GO):
+# - Frontend Dashboard (React/Polaris): Embedded as a secure, iframe-safe document in
+#   `web/backend/index.ts` under the GET `/` route. It connects via standard CDN scripts
+#   (React 18, App Bridge v4) to offer high-signal Polaris components.
+# - Backend REST API (Node.js/Express): Runs a serverless Express engine inside `web/backend/index.ts`.
+# - Database (Prisma/PostgreSQL): Synchronizes session tokens, customer profiles, subscription,
+#   and analytics tables via `prisma/schema.prisma`.
+# - Authentication (Shopify App Express): Handles OAuth, session-token validation, and GDPR
+#   compliance webhooks inside `web/backend/shopify.ts` and `web/backend/index.ts`.
+#
+# 🚀 MERCHANT EXPERIENCE (WHAT THE STORE OWNER HAS TO DO):
+# 1. Install & Link: The store owner installs the app from their Shopify App Store or custom install URL.
+# 2. Database Sync: Ensure database tables are synchronized by running:
 #    👉 pnpm --filter beauty-subscription-optimizer db:push
-# 3. Boot the local development server:
+# 3. Startup: Run the serverless Express backend inside the app workspace:
 #    👉 pnpm --filter beauty-subscription-optimizer start
-# 4. Open the App Dashboard, click "Seed Demo Data" to populate mock subscribers,
-#    and try out the interactive billing tier gating (Starter vs Pro vs Enterprise).
+# 4. First-time Setup (Seed Demo Data):
+#    - When loading the app for the first time inside Shopify Admin, the dashboard will be blank.
+#    - The store owner clicks "Seed Demo Data" at the top right of the dashboard.
+#    - This instantly generates pre-configured subscriber profiles (Jessica Alchemist, Rohit Clay)
+#      and populates churn and curation metrics in their PostgreSQL database.
+# 5. Preference Quiz Simulation:
+#    - The store owner goes to the "Storefront Preference Quiz" tab.
+#    - They can choose options like dry skin, floral fragrance, haircare-only, vegan-only, wavy hair,
+#      and arid climate, and click "Save Quiz Profile to DB".
+#      This creates/updates a secure customer profile (Customer ID: Customer/1003) inside the database.
+# 6. Plan Upgrades & Paywall Gating:
+#    - The store owner starts on the "STARTER" plan.
+#    - If they navigate to the "AI Box Curation" or "Inventory Analytics" tabs, they will see
+#      a beautiful centered Shopify Polaris Lock screen (🔒 Locked Feature) telling them to upgrade.
+#    - They can click "Upgrade to Pro" or "Go Enterprise" on the top banner. This instantly
+#      transitions the database plan status, and the locks lift in real-time, unlocking all features!
 #
-# 🚨 COMMON DEPLOYMENT ERRORS & SOLUTIONS:
-#
-# 🟥 ERROR: "Billing transition failed: PrismaClientKnownRequestError"
-# 🔍 Why: The session table was queried but the active session ID was missing or mismatched.
-# ✅ Solve: Verify the merchant is logged in and App Bridge has initialized a valid session context.
-#
-# 🟥 ERROR: "403: LIMIT_REACHED"
-# 🔍 Why: The merchant is on the Starter or Pro plan and has reached their unique customer profile limit.
-# ✅ Solve: Present the Polaris upgrade paywall banner and let them upgrade to the next tier.
+# 🔮 WHAT TO EXPECT (THE APP LIFECYCLE):
+# - Robust App Bridge Handshake: When the merchant loads the app in Shopify, the frontend polls
+#   securely for `window.shopify.ready` before requesting data. This prevents initial unauthenticated
+#   calls and ensures seamless frame loading.
+# - Self-Healing Redirections: If the merchant opens the app Vercel URL directly in a browser tab
+#   (outside the iframe), the app automatically detects this and redirects the browser window back
+#   to load inside the official Shopify Admin dashboard.
+# - Strict Customer Cap Protection: If the merchant is on the STARTER or PRO plan and reaches their
+#   subscriber cap, the backend will block further creations and return a descriptive `403 LIMIT_REACHED`
+#   response, reminding them to upgrade to higher tiers.
+# - Full GDPR Compliance: If a customer requests redaction or uninstalls the app, Shopify triggers
+#   compliance hooks that cleanly purge all personal customer metadata from the Postgres database.
 # ==============================================================================

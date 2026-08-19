@@ -184,12 +184,139 @@ app.patch("/api/admin/billing", async (req, res) => {
   }
 });
 
+  // Storefront Session Loader (For Customer Storefront-facing Routes - No Admin Auth required!)
+  async function validateStorefrontSession(req: express.Request, res: express.Response, next: express.NextFunction) {
+    if (isTestMode) {
+      const sessionId = req.headers["x-test-session-id"] as string || "beauty-portal-session";
+      const shop = req.headers["x-shop-domain"] as string || "beauty-e2e-shop.myshopify.com";
+      try {
+        let session = await prisma.session.findUnique({ where: { id: sessionId } });
+        if (!session) {
+          session = await prisma.session.create({
+            data: {
+              id: sessionId,
+              shop,
+              state: "active_mock",
+              accessToken: "mock_token",
+              plan: "STARTER"
+            }
+          });
+        }
+        req.body.session = session;
+        return next();
+      } catch (err: any) {
+        return res.status(500).json({ error: "Test session storage error", details: err.message });
+      }
+    }
+
+    const shop = req.headers["x-shop-domain"] as string || req.query.shop as string || "test-shop.myshopify.com";
+    try {
+      let session = await prisma.session.findFirst({ where: { shop } });
+      if (!session) {
+        session = await prisma.session.create({
+          data: {
+            id: `storefront_${shop}`,
+            shop,
+            state: "storefront_active",
+            accessToken: "mock_token",
+            plan: "STARTER"
+          }
+        });
+      }
+      req.body.session = session;
+      next();
+    } catch (err: any) {
+      res.status(500).json({ error: "Storefront validation failed", details: err.message });
+    }
+  }
+
+  // POST /api/storefront/customer-profiles (Saves quiz responses directly from customer storefront - no admin auth)
+  app.post("/api/storefront/customer-profiles", validateStorefrontSession, async (req, res) => {
+    try {
+      const session = req.body.session;
+      const shop = session.shop;
+      const {
+        customerId,
+        name,
+        email,
+        skinType,
+        concerns,
+        fragrancePreference,
+        priceSensitivity,
+        preferredCategories,
+        ethicalPreferences,
+        hairType,
+        localClimate
+      } = req.body;
+
+      if (!customerId) {
+        return res.status(400).json({ error: "Missing customerId GID" });
+      }
+
+      const count = await prisma.customerProfile.count({ where: { shop } });
+      const limit = session.plan === "STARTER" ? 2000 : (session.plan === "PRO" ? 20000 : Infinity);
+
+      if (count >= limit && !req.body.id) {
+        return res.status(403).json({
+          error: "LIMIT_REACHED",
+          message: `Plan limit reached (${limit} customer profiles under ${session.plan} plan). Please contact the store owner to upgrade.`
+        });
+      }
+
+      const profile = await prisma.customerProfile.upsert({
+        where: { id: req.body.id || "new-profile-uuid" },
+        update: {
+          name,
+          email,
+          skinType,
+          concerns,
+          fragrancePreference,
+          priceSensitivity,
+          preferredCategories,
+          ethicalPreferences,
+          hairType,
+          localClimate
+        },
+        create: {
+          customerId,
+          shop,
+          name,
+          email,
+          skinType,
+          concerns,
+          fragrancePreference,
+          priceSensitivity,
+          preferredCategories,
+          ethicalPreferences,
+          hairType,
+          localClimate
+        }
+      });
+
+      res.json({ success: true, profile });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
 // POST /api/admin/customer-profiles (Saves quiz responses / preference profiling + checks plan limits)
 app.post("/api/admin/customer-profiles", async (req, res) => {
   try {
     const session = res.locals.shopify.session;
     const shop = session.shop;
-    const { customerId, name, email, skinType, concerns, fragrancePreference, priceSensitivity } = req.body;
+    const {
+      customerId,
+      name,
+      email,
+      skinType,
+      concerns,
+      fragrancePreference,
+      priceSensitivity,
+      preferredCategories,
+      ethicalPreferences,
+      hairType,
+      localClimate
+    } = req.body;
 
     if (!customerId) {
       return res.status(400).json({ error: "Missing customerId GID" });
@@ -219,7 +346,11 @@ app.post("/api/admin/customer-profiles", async (req, res) => {
         skinType,
         concerns,
         fragrancePreference,
-        priceSensitivity
+        priceSensitivity,
+        preferredCategories,
+        ethicalPreferences,
+        hairType,
+        localClimate
       },
       create: {
         customerId,
@@ -229,7 +360,11 @@ app.post("/api/admin/customer-profiles", async (req, res) => {
         skinType,
         concerns,
         fragrancePreference,
-        priceSensitivity
+        priceSensitivity,
+        preferredCategories,
+        ethicalPreferences,
+        hairType,
+        localClimate
       }
     });
 
@@ -359,6 +494,10 @@ app.post("/api/admin/curations/create-sample-data", async (req, res) => {
         concerns: ["aging", "dryness"],
         fragrancePreference: "floral",
         priceSensitivity: "low",
+        preferredCategories: ["skincare"],
+        ethicalPreferences: ["cruelty-free"],
+        hairType: "wavy",
+        localClimate: "dry",
         subscription: {
           create: {
             status: "ACTIVE",
@@ -386,6 +525,10 @@ app.post("/api/admin/curations/create-sample-data", async (req, res) => {
         concerns: ["acne", "redness"],
         fragrancePreference: "none",
         priceSensitivity: "medium",
+        preferredCategories: ["skincare", "makeup"],
+        ethicalPreferences: ["vegan"],
+        hairType: "straight",
+        localClimate: "humid",
         subscription: {
           create: {
             status: "ACTIVE",
@@ -696,6 +839,38 @@ app.get("/", (req, res) => {
       const [quizConcerns, setQuizConcerns] = React.useState(["aging"]);
       const [quizFragrance, setQuizFragrance] = React.useState("floral");
       const [quizPrice, setQuizPrice] = React.useState("low");
+      const [quizCategories, setQuizCategories] = React.useState(["skincare"]);
+      const [quizEthical, setQuizEthical] = React.useState(["cruelty-free"]);
+      const [quizHair, setQuizHair] = React.useState("wavy");
+      const [quizClimate, setQuizClimate] = React.useState("temperate");
+
+      const [selectedQuizCustomerId, setSelectedQuizCustomerId] = React.useState("gid://shopify/Customer/1001");
+      const [manualQuizName, setManualQuizName] = React.useState("New Subscriber");
+      const [manualQuizEmail, setManualQuizEmail] = React.useState("new@subscriber.com");
+      const [manualQuizGid, setManualQuizGid] = React.useState("gid://shopify/Customer/1003");
+
+      React.useEffect(() => {
+        const selectedProfile = profiles.find(p => p.customerId === selectedQuizCustomerId);
+        if (selectedProfile) {
+          setQuizSkinType(selectedProfile.skinType || "dry");
+          setQuizConcerns(selectedProfile.concerns || []);
+          setQuizFragrance(selectedProfile.fragrancePreference || "floral");
+          setQuizPrice(selectedProfile.priceSensitivity || "low");
+          setQuizCategories(selectedProfile.preferredCategories || ["skincare"]);
+          setQuizEthical(selectedProfile.ethicalPreferences || ["cruelty-free"]);
+          setQuizHair(selectedProfile.hairType || "wavy");
+          setQuizClimate(selectedProfile.localClimate || "temperate");
+        } else if (selectedQuizCustomerId === "new") {
+          setQuizSkinType("dry");
+          setQuizConcerns([]);
+          setQuizFragrance("floral");
+          setQuizPrice("low");
+          setQuizCategories(["skincare"]);
+          setQuizEthical(["cruelty-free"]);
+          setQuizHair("wavy");
+          setQuizClimate("temperate");
+        }
+      }, [selectedQuizCustomerId, profiles]);
 
       const [notification, setNotification] = React.useState(null);
 
@@ -729,13 +904,18 @@ app.get("/", (req, res) => {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            customerId: "gid://shopify/Customer/1003",
-            name: "Self Tested Beauty",
-            email: "tested@beauty.com",
+            id: selectedQuizCustomerId === "new" ? undefined : (profiles.find(p => p.customerId === selectedQuizCustomerId)?.id),
+            customerId: selectedQuizCustomerId === "new" ? manualQuizGid : selectedQuizCustomerId,
+            name: selectedQuizCustomerId === "new" ? manualQuizName : (profiles.find(p => p.customerId === selectedQuizCustomerId)?.name),
+            email: selectedQuizCustomerId === "new" ? manualQuizEmail : (profiles.find(p => p.customerId === selectedQuizCustomerId)?.email),
             skinType: quizSkinType,
             concerns: quizConcerns,
             fragrancePreference: quizFragrance,
-            priceSensitivity: quizPrice
+            priceSensitivity: quizPrice,
+            preferredCategories: quizCategories,
+            ethicalPreferences: quizEthical,
+            hairType: quizHair,
+            localClimate: quizClimate
           })
         })
         .then(res => {
@@ -1006,6 +1186,27 @@ app.get("/", (req, res) => {
             e("h3", { style: { fontSize: "16px", fontWeight: "600", marginBottom: "12px" } }, "Simulated Storefront Preference Quiz (Phase 3)"),
             e("p", { style: { color: "#6d7175", marginBottom: "20px" } }, "This preference profile is embedded at signup or sent via surveys to build customer metadata."),
             e("div", { style: { marginBottom: "16px" } },
+              e("label", { style: { display: "block", fontWeight: "bold", marginBottom: "6px" } }, "Select Customer"),
+              e("select", { value: selectedQuizCustomerId, onChange: (e) => setSelectedQuizCustomerId(e.target.value), style: { width: "100%", padding: "8px", borderRadius: "4px", border: "1px solid #8c9196" } },
+                profiles.map(p => e("option", { key: p.customerId, value: p.customerId }, p.name + " (" + p.email + ")")),
+                e("option", { value: "new" }, "➕ Enter Custom/New Customer Info")
+              )
+            ),
+            selectedQuizCustomerId === "new" && e("div", { style: { background: "#f6f6f7", padding: "12px", borderRadius: "6px", marginBottom: "16px" } },
+              e("div", { style: { marginBottom: "10px" } },
+                e("label", { style: { display: "block", fontWeight: "600", fontSize: "12px", marginBottom: "4px" } }, "Shopify Customer GID"),
+                e("input", { type: "text", value: manualQuizGid, onChange: (e) => setManualQuizGid(e.target.value), style: { width: "100%", padding: "6px", borderRadius: "4px", border: "1px solid #8c9196", fontSize: "13px" } })
+              ),
+              e("div", { style: { marginBottom: "10px" } },
+                e("label", { style: { display: "block", fontWeight: "600", fontSize: "12px", marginBottom: "4px" } }, "Customer Full Name"),
+                e("input", { type: "text", value: manualQuizName, onChange: (e) => setManualQuizName(e.target.value), style: { width: "100%", padding: "6px", borderRadius: "4px", border: "1px solid #8c9196", fontSize: "13px" } })
+              ),
+              e("div", { style: { marginBottom: "10px" } },
+                e("label", { style: { display: "block", fontWeight: "600", fontSize: "12px", marginBottom: "4px" } }, "Customer Email"),
+                e("input", { type: "text", value: manualQuizEmail, onChange: (e) => setManualQuizEmail(e.target.value), style: { width: "100%", padding: "6px", borderRadius: "4px", border: "1px solid #8c9196", fontSize: "13px" } })
+              )
+            ),
+            e("div", { style: { marginBottom: "16px" } },
               e("label", { style: { display: "block", fontWeight: "bold", marginBottom: "6px" } }, "Skin Type"),
               e("select", { value: quizSkinType, onChange: (e) => setQuizSkinType(e.target.value), style: { width: "100%", padding: "8px", borderRadius: "4px", border: "1px solid #8c9196" } },
                 e("option", { value: "dry" }, "Dry / Dehydrated"),
@@ -1028,6 +1229,43 @@ app.get("/", (req, res) => {
                 e("option", { value: "low" }, "Value-Driven (Low)"),
                 e("option", { value: "medium" }, "Balanced (Medium)"),
                 e("option", { value: "high" }, "Luxury / Premium (High)")
+              )
+            ),
+            e("div", { style: { marginBottom: "16px" } },
+              e("label", { style: { display: "block", fontWeight: "bold", marginBottom: "6px" } }, "Preferred Product Categories"),
+              e("select", { value: quizCategories[0], onChange: (e) => setQuizCategories([e.target.value]), style: { width: "100%", padding: "8px", borderRadius: "4px", border: "1px solid #8c9196" } },
+                e("option", { value: "skincare" }, "Skincare Only"),
+                e("option", { value: "makeup" }, "Makeup Only"),
+                e("option", { value: "haircare" }, "Haircare Only"),
+                e("option", { value: "all" }, "A Mix of Everything")
+              )
+            ),
+            e("div", { style: { marginBottom: "16px" } },
+              e("label", { style: { display: "block", fontWeight: "bold", marginBottom: "6px" } }, "Ethical / Ingredient Preference"),
+              e("select", { value: quizEthical[0], onChange: (e) => setQuizEthical([e.target.value]), style: { width: "100%", padding: "8px", borderRadius: "4px", border: "1px solid #8c9196" } },
+                e("option", { value: "cruelty-free" }, "Cruelty-Free"),
+                e("option", { value: "vegan" }, "Vegan Only"),
+                e("option", { value: "organic" }, "Clean / Organic"),
+                e("option", { value: "none" }, "No Restrictions")
+              )
+            ),
+            e("div", { style: { marginBottom: "16px" } },
+              e("label", { style: { display: "block", fontWeight: "bold", marginBottom: "6px" } }, "Hair Type & Texture"),
+              e("select", { value: quizHair, onChange: (e) => setQuizHair(e.target.value), style: { width: "100%", padding: "8px", borderRadius: "4px", border: "1px solid #8c9196" } },
+                e("option", { value: "straight" }, "Fine & Straight"),
+                e("option", { value: "wavy" }, "Wavy / Textured"),
+                e("option", { value: "curly" }, "Curly"),
+                e("option", { value: "coily" }, "Coily / Textured"),
+                e("option", { value: "none" }, "Do not include Hair Products")
+              )
+            ),
+            e("div", { style: { marginBottom: "16px" } },
+              e("label", { style: { display: "block", fontWeight: "bold", marginBottom: "6px" } }, "Primary Local Climate"),
+              e("select", { value: quizClimate, onChange: (e) => setQuizClimate(e.target.value), style: { width: "100%", padding: "8px", borderRadius: "4px", border: "1px solid #8c9196" } },
+                e("option", { value: "arid" }, "Arid / Dry"),
+                e("option", { value: "humid" }, "Humid / Tropical"),
+                e("option", { value: "temperate" }, "Temperate / Seasonal"),
+                e("option", { value: "cold" }, "Cold / Dry")
               )
             ),
             e("button", { className: "button-primary", onClick: handleSaveQuizProfile }, "Save Quiz Profile to DB")

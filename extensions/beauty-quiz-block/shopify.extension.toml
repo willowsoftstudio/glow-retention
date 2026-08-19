@@ -1,0 +1,7 @@
+api_version = "2026-10"
+
+[[extensions]]
+name = "Beauty Profile Quiz"
+handle = "beauty-profile-quiz-block"
+uid = "21c17821-a6e5-63a5-78c1-1d64dd77c90ed38c0888"
+type = "theme"

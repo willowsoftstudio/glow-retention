@@ -1,0 +1,466 @@
+{% comment %}
+  💄 Beauty Subscription Optimizer — Storefront Preference Quiz App Block (Paws & Effect Parity)
+  This block is embedded directly into the merchant's theme via the Customizer.
+  It supports inline page embed layouts, popup modal layout modes, auto popups with custom delays,
+  and global click listeners for custom links (e.g. any link with class "beauty-quiz-trigger" or href="#beauty-quiz").
+{% endcomment %}
+
+{% assign is_inline = false %}
+{% if block.settings.embed_layout == 'inline' %}
+  {% assign is_inline = true %}
+  {% assign container_style = "position: relative; display: block; background: #ffffff; width: 100%; max-width: 650px; margin: 40px auto; padding: 30px; border-radius: 12px; box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08); z-index: 1;" %}
+{% else %}
+  {% assign container_style = "display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 999999; justify-content: center; align-items: center;" %}
+{% endif %}
+
+<!-- Trigger Button (Only rendered if layout is Modal and display mode is Button or Both) -->
+{% if is_inline == false and block.settings.display_mode != 'popup' %}
+  <div class="beauty-quiz-trigger-wrapper" style="text-align: center; margin: 20px auto;">
+    <button id="beauty-quiz-trigger" class="beauty-quiz-button-primary">
+      ✨ Take Our AI Beauty Quiz
+    </button>
+  </div>
+{% endif %}
+
+<!-- Main Quiz Container (Modal Overlay or Inline Container) -->
+<div class="beauty-quiz-modal-overlay" id="beauty-quiz-modal" style="{{ container_style }}">
+  <div class="beauty-quiz-card" style="position: relative; background: #ffffff; max-width: 600px; width: 100%; max-height: 90vh; overflow-y: auto; border-radius: 12px; padding: 30px; box-shadow: 0 10px 40px rgba(0,0,0,0.15);">
+    
+    <!-- Close Button (Only for Modal layout) -->
+    {% if is_inline == false %}
+      <button id="beauty-quiz-close" class="beauty-quiz-close-btn" aria-label="Close Quiz">✕</button>
+    {% endif %}
+
+    <div class="beauty-quiz-header">
+      <h2>💄 Discover Your Custom Beauty Ritual</h2>
+      <p>Tell us about your skin, hair, and lifestyle preferences. Our AI will curate your monthly subscription box with perfect-match ingredients!</p>
+    </div>
+
+    <div id="beauty-quiz-success-msg" class="beauty-quiz-success-alert" style="display: none;">
+      🎉 <strong>Preferences Saved!</strong> Your profile has been updated in our AI curation engine. We've updated your next monthly box!
+    </div>
+
+    <form id="beauty-quiz-form" onsubmit="submitBeautyQuiz(event)">
+      <!-- Section 1: Skin Diagnostics -->
+      <div class="beauty-quiz-section">
+        <h3>✨ 1. Skin & Fragrance Profile</h3>
+        
+        <div class="form-group">
+          <label for="beauty-skin-type">Skin Type</label>
+          <select id="beauty-skin-type" name="skinType" required>
+            <option value="dry">Dry / Dehydrated</option>
+            <option value="oily">Oily / Acne-Prone</option>
+            <option value="sensitive">Sensitive / Redness-Prone</option>
+            <option value="combination" selected>Combination</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label for="beauty-skin-concerns">Primary Skin Concerns (Select all that apply)</label>
+          <div class="checkbox-grid">
+            <label class="checkbox-label"><input type="checkbox" name="concerns" value="aging"> Anti-Aging</label>
+            <label class="checkbox-label"><input type="checkbox" name="concerns" value="acne"> Acne & Blemishes</label>
+            <label class="checkbox-label"><input type="checkbox" name="concerns" value="dryness" checked> Dryness & Dehydration</label>
+            <label class="checkbox-label"><input type="checkbox" name="concerns" value="redness"> Redness & Sensitivity</label>
+            <label class="checkbox-label"><input type="checkbox" name="concerns" value="dullness"> Dullness & Dark Spots</label>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label for="beauty-fragrance">Fragrance Preference</label>
+          <select id="beauty-fragrance" name="fragrancePreference" required>
+            <option value="floral">Floral / Sweet</option>
+            <option value="citrus" selected>Citrus / Fresh</option>
+            <option value="none">Unscented / No Fragrance</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label for="beauty-price">Budget / Price Sensitivity</label>
+          <select id="beauty-price" name="priceSensitivity" required>
+            <option value="low">Value-Driven (Low)</option>
+            <option value="medium" selected>Balanced (Medium)</option>
+            <option value="high">Luxury / Premium (High)</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Section 2: Advanced Diagnostics -->
+      <div class="beauty-quiz-section" style="border-bottom: none; margin-bottom: 10px;">
+        <h3>🌿 2. Personalization & Lifestyle Preferences</h3>
+
+        <div class="form-group">
+          <label for="beauty-categories">Preferred Product Categories</label>
+          <select id="beauty-categories" name="preferredCategories" required>
+            <option value="skincare">Skincare Only</option>
+            <option value="makeup">Makeup Only</option>
+            <option value="haircare">Haircare Only</option>
+            <option value="all" selected>A Mix of Everything</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label for="beauty-ethical">Ethical & Ingredient Preferences</label>
+          <select id="beauty-ethical" name="ethicalPreferences" required>
+            <option value="cruelty-free" selected>Cruelty-Free</option>
+            <option value="vegan">Vegan Only</option>
+            <option value="organic">Clean / Organic Only</option>
+            <option value="none">No Restrictions</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label for="beauty-hair">Hair Type & Texture</label>
+          <select id="beauty-hair" name="hairType" required>
+            <option value="straight">Fine & Straight</option>
+            <option value="wavy" selected>Wavy / Textured</option>
+            <option value="curly">Curly</option>
+            <option value="coily">Coily / Textured</option>
+            <option value="none">Do not include Hair Products</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label for="beauty-climate">Primary Local Climate</label>
+          <select id="beauty-climate" name="localClimate" required>
+            <option value="arid">Arid / Dry</option>
+            <option value="humid">Humid / Tropical</option>
+            <option value="temperate" selected>Temperate / Seasonal</option>
+            <option value="cold">Cold / Dry</option>
+          </select>
+        </div>
+      </div>
+
+      <button type="submit" id="beauty-submit-btn" class="beauty-quiz-submit-btn">✨ Save My Beauty Profile</button>
+    </form>
+  </div>
+</div>
+
+<style>
+  .beauty-quiz-button-primary {
+    background: #000000;
+    color: #ffffff;
+    border: none;
+    padding: 14px 28px;
+    font-size: 15px;
+    font-weight: 600;
+    border-radius: 8px;
+    cursor: pointer;
+    box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+    transition: background 0.2s, transform 0.15s;
+  }
+  .beauty-quiz-button-primary:hover {
+    background: #2a2b2c;
+    transform: translateY(-1px);
+  }
+  .beauty-quiz-close-btn {
+    position: absolute;
+    top: 15px;
+    right: 20px;
+    background: none;
+    border: none;
+    font-size: 20px;
+    cursor: pointer;
+    color: #6d7175;
+  }
+  .beauty-quiz-close-btn:hover {
+    color: #000000;
+  }
+  .beauty-quiz-card {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    color: #202223;
+    animation: beautySlideIn 0.3s ease-out;
+  }
+  @keyframes beautySlideIn {
+    from {
+      opacity: 0;
+      transform: translateY(30px) scale(0.97);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+  }
+  .beauty-quiz-header {
+    text-align: center;
+    margin-bottom: 25px;
+  }
+  .beauty-quiz-header h2 {
+    font-size: 22px;
+    font-weight: 700;
+    margin-bottom: 10px;
+    color: #1a1c1d;
+  }
+  .beauty-quiz-header p {
+    color: #6d7175;
+    font-size: 13px;
+    line-height: 1.5;
+  }
+  .beauty-quiz-section {
+    margin-bottom: 20px;
+    border-bottom: 1px solid #f1f2f4;
+    padding-bottom: 15px;
+  }
+  .beauty-quiz-section h3 {
+    font-size: 15px;
+    font-weight: 600;
+    margin-bottom: 12px;
+    color: #1c1d1f;
+  }
+  .form-group {
+    margin-bottom: 14px;
+  }
+  .form-group label {
+    display: block;
+    font-weight: 600;
+    font-size: 12px;
+    margin-bottom: 5px;
+    color: #202223;
+  }
+  .form-group select {
+    width: 100%;
+    padding: 8px 12px;
+    border-radius: 6px;
+    border: 1px solid #8c9196;
+    font-size: 13px;
+    background-color: #ffffff;
+  }
+  .checkbox-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+    gap: 8px;
+    background: #f6f6f7;
+    padding: 10px;
+    border-radius: 6px;
+  }
+  .checkbox-label {
+    display: flex;
+    align-items: center;
+    font-size: 12px;
+    cursor: pointer;
+    font-weight: normal;
+  }
+  .checkbox-label input {
+    margin-right: 6px;
+  }
+  .beauty-quiz-submit-btn {
+    width: 100%;
+    background: #000000;
+    color: #ffffff;
+    border: none;
+    padding: 12px;
+    font-size: 14px;
+    font-weight: 600;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background 0.2s;
+  }
+  .beauty-quiz-submit-btn:hover {
+    background: #2a2b2c;
+  }
+  .beauty-quiz-success-alert {
+    background-color: #e2f1e8;
+    color: #1e5128;
+    border: 1px solid #b8dfc4;
+    padding: 12px;
+    border-radius: 6px;
+    font-size: 13px;
+    margin-bottom: 18px;
+    text-align: center;
+  }
+</style>
+
+<script>
+  (function() {
+    const trigger = document.getElementById("beauty-quiz-trigger");
+    const modal = document.getElementById("beauty-quiz-modal");
+    const closeBtn = document.getElementById("beauty-quiz-close");
+    const form = document.getElementById("beauty-quiz-form");
+    const successMsg = document.getElementById("beauty-quiz-success-msg");
+
+    const embedLayout = "{{ block.settings.embed_layout }}";
+    const displayMode = "{{ block.settings.display_mode }}";
+    const popupDelay = {{ block.settings.popup_delay | default: 3 }} * 1000;
+
+    // Portal relocation: Move modal block directly to document.body so it overlays perfectly over page content
+    if (embedLayout !== "inline") {
+      if (modal && modal.parentNode !== document.body) {
+        document.body.appendChild(modal);
+      }
+    }
+
+    // A. Global Click Listener for custom link triggers (.beauty-quiz-trigger or href="#beauty-quiz")
+    document.addEventListener("click", (ev) => {
+      const targetElement = ev.target.closest("#beauty-quiz-trigger, .beauty-quiz-trigger, a[href='#beauty-quiz'], a[href='#beauty-quiz-trigger']");
+      if (targetElement && embedLayout !== "inline") {
+        ev.preventDefault();
+        ev.stopPropagation();
+
+        if (modal) {
+          modal.style.display = "flex";
+          document.body.style.overflow = "hidden"; // Prevent background body scroll
+        }
+      }
+    });
+
+    // B. Close Modal actions
+    if (closeBtn && embedLayout !== "inline") {
+      closeBtn.addEventListener("click", () => {
+        if (modal) modal.style.display = "none";
+        document.body.style.overflow = "auto";
+        sessionStorage.setItem("beauty-quiz-closed", "true"); // Store close token in session
+      });
+    }
+
+    // C. Automatic Pop-up triggers
+    if (embedLayout !== "inline" && (displayMode === "popup" || displayMode === "both")) {
+      setTimeout(() => {
+        if (!modal) return;
+        const hasClosedQuiz = sessionStorage.getItem("beauty-quiz-closed") === "true";
+        const isDesignMode = window.Shopify && window.Shopify.designMode;
+
+        // Auto pops open unless they previously closed it in this session, or if merchant is in Theme Editor (designMode)
+        if (modal.style.display !== "flex" && (!hasClosedQuiz || isDesignMode)) {
+          modal.style.display = "flex";
+          document.body.style.overflow = "hidden";
+        }
+      }, popupDelay);
+    }
+
+    // D. Shopify Theme Editor Native select events
+    if (embedLayout !== "inline") {
+      document.addEventListener("shopify:block:select", (event) => {
+        if (event.detail.blockId === "{{ block.id }}" && modal) {
+          modal.style.display = "flex";
+          document.body.style.overflow = "hidden";
+        }
+      });
+      document.addEventListener("shopify:block:deselect", (event) => {
+        if (event.detail.blockId === "{{ block.id }}" && modal) {
+          modal.style.display = "none";
+          document.body.style.overflow = "auto";
+        }
+      });
+    }
+  })();
+
+  // E. Form submission handler
+  function submitBeautyQuiz(event) {
+    event.preventDefault();
+
+    const form = document.getElementById("beauty-quiz-form");
+    const submitBtn = document.getElementById("beauty-submit-btn");
+    const successMsg = document.getElementById("beauty-quiz-success-msg");
+
+    const shopDomain = "{{ shop.permanent_domain }}";
+    const customerId = "{% if customer %}gid://shopify/Customer/{{ customer.id }}{% else %}guest_visitor{% endif %}";
+    const customerEmail = "{% if customer %}{{ customer.email }}{% else %}visitor@anonymous.com{% endif %}";
+    const customerName = "{% if customer %}{{ customer.name | escape }}{% else %}Storefront Visitor{% endif %}";
+
+    const backendApiUrl = "{{ block.settings.api_url | default: 'https://glow-retention-git-develop-willowsoftstudio-5437s-projects.vercel.app' }}";
+
+    // Gather selected concerns
+    const checkedConcerns = [];
+    document.querySelectorAll('input[name="concerns"]:checked').forEach((cb) => {
+      checkedConcerns.push(cb.value);
+    });
+
+    const payload = {
+      customerId: customerId,
+      name: customerName,
+      email: customerEmail,
+      skinType: document.getElementById("beauty-skin-type").value,
+      concerns: checkedConcerns,
+      fragrancePreference: document.getElementById("beauty-fragrance").value,
+      priceSensitivity: document.getElementById("beauty-price").value,
+      preferredCategories: [document.getElementById("beauty-categories").value],
+      ethicalPreferences: [document.getElementById("beauty-ethical").value],
+      hairType: document.getElementById("beauty-hair").value,
+      localClimate: document.getElementById("beauty-climate").value
+    };
+
+    submitBtn.disabled = true;
+    submitBtn.innerText = "⏳ Saving Profile...";
+
+    fetch(backendApiUrl + "/api/storefront/customer-profiles", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-test-session-id": "beauty-portal-session",
+        "x-shop-domain": shopDomain
+      },
+      body: JSON.stringify(payload)
+    })
+      .then(res => {
+        if (!res.ok) {
+          return res.json().then((err) => { throw new Error(err.message || "Failed to submit"); });
+        }
+        return res.json();
+      })
+      .then(data => {
+        successMsg.style.display = "block";
+        submitBtn.innerText = "✨ Save My Beauty Profile";
+        submitBtn.disabled = false;
+        
+        // Auto-scroll to success message
+        successMsg.scrollIntoView({ behavior: "smooth", block: "center" });
+
+        // Auto hide success toast after 6 seconds
+        setTimeout(() => {
+          successMsg.style.display = "none";
+        }, 6000);
+      })
+      .catch(err => {
+        alert("🔒 Submission Error: " + err.message);
+        submitBtn.innerText = "✨ Save My Beauty Profile";
+        submitBtn.disabled = false;
+      });
+  }
+</script>
+
+{% schema %}
+{
+  "name": "Beauty Profile Quiz",
+  "target": "section",
+  "templates": ["index", "product", "cart", "page"],
+  "settings": [
+    {
+      "type": "select",
+      "id": "embed_layout",
+      "label": "Block Layout Mode",
+      "options": [
+        { "value": "modal", "label": "Button triggers Modal Dialog (Popup Overlay)" },
+        { "value": "inline", "label": "Full Portal rendered Directly In-line on Page" }
+      ],
+      "default": "modal"
+    },
+    {
+      "type": "select",
+      "id": "display_mode",
+      "label": "Display Mode (Modal Layout only)",
+      "options": [
+        { "value": "button", "label": "Display Button Only" },
+        { "value": "popup", "label": "Auto Pop-up Only on Load" },
+        { "value": "both", "label": "Display Both (Button + Auto Pop-up)" }
+      ],
+      "default": "button"
+    },
+    {
+      "type": "range",
+      "id": "popup_delay",
+      "label": "Auto Pop-up Delay (Seconds)",
+      "min": 1,
+      "max": 10,
+      "step": 1,
+      "default": 3
+    },
+    {
+      "type": "text",
+      "id": "api_url",
+      "label": "App Backend URL",
+      "default": "https://glow-retention-git-develop-willowsoftstudio-5437s-projects.vercel.app",
+      "info": "Point to your active, live Vercel deployment root domain."
+    }
+  ]
+}
+{% endschema %}
