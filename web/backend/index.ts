@@ -1468,6 +1468,16 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
       const [formConcern, setFormConcern] = React.useState(profile ? (profile.concerns?.[0] || "aging") : "aging");
       const [savingProfile, setSavingProfile] = React.useState(false);
 
+      // Search, Filter & Pagination states
+      const [searchQuery, setSearchQuery] = React.useState("");
+      const [currentPage, setCurrentPage] = React.useState(1);
+      const [strictFilter, setStrictFilter] = React.useState(false);
+      const itemsPerPage = 6;
+
+      React.useEffect(() => {
+        setCurrentPage(1);
+      }, [searchQuery, strictFilter]);
+
       // Initialize default selection in builder if empty and no contract exists
       React.useEffect(() => {
         if (!contract && liveProducts.length > 0 && selectedVariants.length === 0) {
@@ -1496,10 +1506,32 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
         }
       };
 
-      // Custom Curation Matching to dynamically sort products based on current profile preferences
-      const sortedProducts = React.useMemo(() => {
+      // Pipeline: Search, Filter, Curation Sorting & Pagination
+      const pipelineData = React.useMemo(() => {
         const currentSkin = profile ? profile.skinType : formSkinType;
-        return [...liveProducts].sort((a, b) => {
+        const currentConcern = profile ? (profile.concerns?.[0] || "aging") : formConcern;
+
+        // 1. Search Filter (by name case-insensitively)
+        let filtered = [...liveProducts];
+        if (searchQuery.trim()) {
+          const q = searchQuery.toLowerCase().trim();
+          filtered = filtered.filter(p => p.productName.toLowerCase().includes(q));
+        }
+
+        // 2. Strict Skin Profile Filter
+        if (strictFilter) {
+          filtered = filtered.filter(p => {
+            const name = p.productName.toLowerCase();
+            // Dry skin strictly filters out heavy charcoal oily masks
+            if (currentSkin === "dry" && (name.includes("mask") || name.includes("charcoal"))) return false;
+            // Oily skin strictly filters out thick oily dry-skin serums
+            if ((currentSkin === "oily" || currentSkin === "combination") && (name.includes("serum") || name.includes("vitamin"))) return false;
+            return true;
+          });
+        }
+
+        // 3. AI Curation Scoring & Sorting
+        const sorted = filtered.sort((a, b) => {
           let scoreA = 0;
           let scoreB = 0;
           const aName = a.productName.toLowerCase();
@@ -1514,7 +1546,19 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
           }
           return scoreB - scoreA;
         });
-      }, [profile, formSkinType, liveProducts]);
+
+        // 4. Paginate
+        const totalItemsCount = sorted.length;
+        const totalPagesCount = Math.max(1, Math.ceil(totalItemsCount / itemsPerPage));
+        const startIndex = (currentPage - 1) * itemsPerPage;
+        const paginatedList = sorted.slice(startIndex, startIndex + itemsPerPage);
+
+        return {
+          products: paginatedList,
+          totalItems: totalItemsCount,
+          totalPages: totalPagesCount
+        };
+      }, [profile, formSkinType, formConcern, liveProducts, searchQuery, strictFilter, currentPage]);
 
       const maxSlots = 3;
       const slotsToRender = Array.from({ length: maxSlots });
@@ -1829,19 +1873,81 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
               )
             ),
 
-            // Dynamic Free Gift Showcase
-            isFreeGiftUnlocked && e("div", { className: "free-gift-card" },
-              e("div", { style: { fontSize: "28px" } }, "🎁"),
-              e("div", null,
-                e("span", { className: "free-gift-badge" }, "🎁 Included Free"),
-                e("div", { className: "free-gift-title" }, "Hydrating Aloe Deluxe Sample"),
-                e("div", { className: "free-gift-desc" }, "Automatically added to your shipments safe from skin type allergens.")
+            // Visual Rewards, Add-on & Free Gift Manager (Like Bliss / Poppin / Peak Fuel)
+            e("div", { style: { marginBottom: "20px", background: "#fffaf0", padding: "14px", borderRadius: "12px", border: "1px dashed #dd6b20" } },
+              e("div", { style: { fontSize: "11px", fontWeight: "700", color: "#c05621", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "8px" } }, "🎁 Active Box Add-ons & Free Rewards"),
+              
+              selectedVariants.length === 0 && !isFreeGiftUnlocked ? 
+                e("p", { style: { fontSize: "12px", color: "#dd6b20", margin: 0, fontStyle: "italic" } }, "Add items above to unlock safe deluxe samples and customized add-ons!") :
+                
+                e("div", { style: { display: "flex", flexDirection: "column", gap: "8px" } },
+                  // 1. Dynamic Free Gift Reward
+                  isFreeGiftUnlocked && e("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 12px", background: "#fff", borderRadius: "8px", border: "1px solid #feebc8" } },
+                    e("div", { style: { display: "flex", alignItems: "center", gap: "8px" } },
+                      e("span", { style: { fontSize: "18px" } }, "🎁"),
+                      e("div", null,
+                        e("div", { style: { fontSize: "12px", fontWeight: "bold", color: "#7b341e" } }, "Hydrating Aloe Deluxe Sample"),
+                        e("span", { className: "free-gift-badge", style: { fontSize: "8px", padding: "1px 4px", background: "#008060" } }, "Free Gift")
+                      )
+                    ),
+                    e("span", { style: { fontSize: "12px", fontWeight: "bold", color: "#008060" } }, "FREE")
+                  ),
+                  
+                  // 2. Manual Add-ons (any variants in selectedVariants beyond the first 3 slots)
+                  selectedVariants.slice(maxSlots).map((vId, subIdx) => {
+                    const prod = liveProducts.find(p => p.variantId === vId);
+                    const actualIdx = maxSlots + subIdx;
+                    const handleRemoveAddon = () => {
+                      const copy = [...selectedVariants];
+                      copy.splice(actualIdx, 1);
+                      setSelectedVariants(copy);
+                    };
+                    return e("div", { key: subIdx, style: { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 12px", background: "#fff", borderRadius: "8px", border: "1px solid #e2e8f0" } },
+                      e("div", { style: { display: "flex", alignItems: "center", gap: "8px" } },
+                        e("span", { style: { fontSize: "18px" } }, "🧴"),
+                        e("div", null,
+                          e("div", { style: { fontSize: "12px", fontWeight: "bold", color: "#2d3748" } }, prod ? prod.productName : "Add-on Product"),
+                          e("span", { className: "free-gift-badge", style: { fontSize: "8px", padding: "1px 4px", background: "var(--primary-color)" } }, "Add-On")
+                        )
+                      ),
+                      e("div", { style: { display: "flex", alignItems: "center", gap: "10px" } },
+                        e("span", { style: { fontSize: "12px", fontWeight: "bold", color: "var(--primary-color)" } }, "$" + (prod ? prod.price.toFixed(2) : "30.00")),
+                        e("button", { 
+                          onClick: handleRemoveAddon,
+                          style: { background: "none", border: "none", color: "#e53e3e", fontWeight: "bold", cursor: "pointer", fontSize: "14px", padding: "0 4px" }
+                        }, "✕")
+                      )
+                    );
+                  })
+                )
+            ),
+
+            // Search & Filter controls
+            e("div", { style: { display: "flex", flexWrap: "wrap", gap: "12px", alignItems: "center", marginBottom: "16px", padding: "12px", background: "#f8fafc", borderRadius: "10px", border: "1px solid #e2e8f0" } },
+              e("div", { style: { flex: 1, minWidth: "160px" } },
+                e("input", { 
+                  type: "text", 
+                  value: searchQuery, 
+                  onChange: (ev) => setSearchQuery(ev.target.value),
+                  placeholder: "🔍 Search products...",
+                  style: { width: "100%", padding: "8px 12px", borderRadius: "6px", border: "1px solid #cbd5e0", fontSize: "13px", outline: "none", boxSizing: "border-box" }
+                })
+              ),
+              e("div", { style: { display: "flex", alignItems: "center", gap: "6px" } },
+                e("input", { 
+                  id: "strict_filter_checkbox",
+                  type: "checkbox", 
+                  checked: strictFilter, 
+                  onChange: (ev) => setStrictFilter(ev.target.checked),
+                  style: { cursor: "pointer" }
+                }),
+                e("label", { htmlFor: "strict_filter_checkbox", style: { fontSize: "12px", fontWeight: "700", color: "#4a5568", textTransform: "uppercase", letterSpacing: "0.5px", cursor: "pointer" } }, "🛡️ Filter by Skin Profile")
               )
             ),
 
             // Catalog Grid
             e("div", { className: "product-grid" },
-              sortedProducts.map((prod) => {
+              pipelineData.products.map((prod) => {
                 const qty = getProductQty(prod.variantId);
                 const isSelected = qty > 0;
                 const toggleProduct = () => {
@@ -1870,6 +1976,25 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
                   e("div", { className: "price-tag" }, "$" + prod.price.toFixed(2))
                 );
               })
+            ),
+
+            // Catalog Pagination controls
+            pipelineData.totalPages > 1 && e("div", { style: { display: "flex", justifyContent: "center", alignItems: "center", gap: "16px", marginTop: "16px", marginBottom: "20px" } },
+              e("button", { 
+                className: "btn-secondary", 
+                disabled: currentPage === 1,
+                onClick: () => setCurrentPage(currentPage - 1),
+                style: { padding: "6px 12px", fontSize: "12px", cursor: currentPage === 1 ? "not-allowed" : "pointer" }
+              }, "◀ Prev"),
+              e("span", { style: { fontSize: "12px", fontWeight: "700", color: "#4a5568" } }, 
+                "Page " + currentPage + " of " + pipelineData.totalPages
+              ),
+              e("button", { 
+                className: "btn-secondary", 
+                disabled: currentPage === pipelineData.totalPages,
+                onClick: () => setCurrentPage(currentPage + 1),
+                style: { padding: "6px 12px", fontSize: "12px", cursor: currentPage === pipelineData.totalPages ? "not-allowed" : "pointer" }
+              }, "Next ▶")
             ),
 
             // Select Delivery Interval (if no contract exists yet)
