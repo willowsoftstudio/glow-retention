@@ -5,6 +5,7 @@ datasource db {
 
 generator client {
   provider = "prisma-client-js"
+  output   = "../web/backend/prisma-client"
 }
 
 model Session {
@@ -27,6 +28,10 @@ model Session {
   emailVerified       Boolean?
   refreshToken        String?
   refreshTokenExpires DateTime?
+  boxPriceLow         Float     @default(30.0)
+  boxPriceMedium      Float     @default(60.0)
+  boxPriceHigh        Float     @default(120.0)
+  targetMargin        Float     @default(55.0)
 }
 
 model CustomerProfile {
@@ -43,6 +48,8 @@ model CustomerProfile {
   ethicalPreferences  String[]            // e.g., ["vegan", "cruelty-free"]
   hairType            String?             // e.g., "straight", "curly"
   localClimate        String?             // e.g., "dry", "humid"
+  zipCode             String?             // Postal code for weather climate API lookups
+  allergens           String[]            // Strictly filtered-out ingredients
   createdAt           DateTime            @default(now())
   updatedAt           DateTime            @updatedAt
 
@@ -56,15 +63,18 @@ model CustomerProfile {
 }
 
 model SubscriptionData {
-  id                String          @id @default(uuid())
-  customerProfileId String          @unique
-  customerProfile   CustomerProfile @relation(fields: [customerProfileId], references: [id], onDelete: Cascade)
-  status            String          @default("ACTIVE") // "ACTIVE", "PAUSED", "CANCELLED"
-  tier              String          @default("STARTER") // "STARTER", "PRO", "ENTERPRISE"
-  skipCount         Int             @default(0)
-  pauseCount        Int             @default(0)
-  createdAt         DateTime        @default(now())
-  updatedAt         DateTime        @updatedAt
+  id                 String          @id @default(uuid())
+  customerProfileId  String          @unique
+  customerProfile    CustomerProfile @relation(fields: [customerProfileId], references: [id], onDelete: Cascade)
+  status             String          @default("ACTIVE") // "ACTIVE", "PAUSED", "CANCELLED"
+  tier               String          @default("STARTER") // "STARTER", "PRO", "ENTERPRISE"
+  skipCount          Int             @default(0)
+  pauseCount         Int             @default(0)
+  failedPaymentCount Int             @default(0) // Failed payments count for dunning
+  tenureMonths       Int             @default(1) // Number of months of active subscription
+  deliveredProductIds String[]        // List of historically delivered product GIDs to prevent duplicate saturation
+  createdAt          DateTime        @default(now())
+  updatedAt          DateTime        @updatedAt
 }
 
 model ChurnRisk {
@@ -93,6 +103,10 @@ model BoxCuration {
   id               String      @id @default(uuid())
   subscriptionTier String      // "STARTER", "PRO", "ENTERPRISE"
   boxMonth         String      // e.g., "2026-09"
+  customerId       String?
+  customerName     String?
+  totalPrice       Float       @default(0.0)
+  targetPrice      Float       @default(0.0)
   suggestedItems   Json        // Array of suggested items { variantId, score, reason }
   acceptedItems    Json?       // Array of chosen items { variantId }
   status           String      @default("SUGGESTED") // "SUGGESTED", "ACCEPTED", "SHIPPED"
@@ -107,6 +121,8 @@ model InventoryAnalytics {
   returnRate     Float       @default(0.0)
   satisfaction   Float       @default(0.0) // Avg product rating
   margin         Float       @default(0.0)
+  price          Float       @default(15.0)
+  cost           Float       @default(6.0)
   stockLevel     Int         @default(0)
   stockRisk      String      @default("LOW") // "LOW", "MEDIUM", "HIGH"
   updatedAt      DateTime    @updatedAt

@@ -1,14 +1,7 @@
-{% comment %}
-  💄 Beauty Subscription Optimizer — Storefront Preference Quiz App Block (Paws & Effect Parity)
-  This block is embedded directly into the merchant's theme via the Customizer.
-  It supports inline page embed layouts, popup modal layout modes, auto popups with custom delays,
-  and global click listeners for custom links (e.g. any link with class "beauty-quiz-trigger" or href="#beauty-quiz").
-{% endcomment %}
-
 {% if block.settings.embed_layout == 'inline' %}
   {% assign is_inline = true %}
   {% assign modal_position_style = "position: relative; display: block; background: none; width: 100%; height: auto; box-shadow: none; z-index: 1;" %}
-  
+
   {% case block.settings.columns_desktop %}
     {% when '1' %}
       {% assign max_card_width = "500px" %}
@@ -54,7 +47,8 @@
     {% assign wrapper_alignment = "text-align: right;" %}
 {% endcase %}
 
-<!-- Trigger Button (Only rendered if layout is Modal and display mode is Button or Both) -->
+<div id="beauty-effect-block-container-{{ block.id }}" class="beauty-effect-block-root">
+
 {% if is_inline == false and block.settings.display_mode != 'popup' %}
   <div class="beauty-quiz-trigger-wrapper" style="margin: 30px 0; {{ wrapper_alignment }} {{ trigger_button_style }} width: 100%;">
     <button id="beauty-quiz-trigger" style="
@@ -74,11 +68,9 @@
   </div>
 {% endif %}
 
-<!-- Main Quiz Container (Modal Overlay or Inline Container) -->
-<div id="beauty-quiz-modal" class="beauty-portal-container-wrapper" style="{{ modal_position_style }}">
+<div id="beauty-quiz-modal" class="beauty-portal-container-wrapper" style="{{ modal_position_style }}" {{ block.shopify_attributes }} data-block-id="{{ block.id }}">
   <div class="beauty-quiz-card" style="{{ card_container_style }} font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">
-    
-    <!-- Close Button (Only for Modal layout) -->
+
     <button id="beauty-quiz-close" style="{{ close_button_style }}" onmouseover="this.style.color='#000'" onmouseout="this.style.color='#6d7175'">✕</button>
 
     <div class="beauty-quiz-header">
@@ -90,11 +82,37 @@
       🎉 <strong>Preferences Saved!</strong> Your profile has been updated in our AI curation engine. We've updated your next monthly box!
     </div>
 
+    <div id="beauty-quiz-guest-view" style="display: none; text-align: center; padding: 20px 0;">
+      <div style="font-size: 55px; margin-bottom: 16px; filter: drop-shadow(0 4px 6px rgba(0,0,0,0.1));">✨💄🌿</div>
+      <h2 style="margin-top: 0; margin-bottom: 12px; font-size: 22px; color: {{ block.settings.button_bg_color | default: '#000000' }}; font-weight: bold;">Unlock Your Curation Dashboard!</h2>
+      <p style="margin: 0 0 24px 0; font-size: 14px; color: #6d7175; line-height: 1.5; text-align: left;">
+        Sign in to submit your AI beauty profile! You will unlock:
+      </p>
+      <ul style="margin: 0 0 28px 0; padding-left: 20px; font-size: 14px; color: #4a5568; text-align: left; line-height: 1.7;">
+        <li>✨ Personalized monthly product curation matching your precise skin & hair type.</li>
+        <li>🚫 Allergen scanner to automatically screen out harmful or sensitive ingredients.</li>
+        <li>📦 Smart subscription optimization to easily swap products and avoid wasted inventory.</li>
+      </ul>
+      <button id="beauty-guest-login-btn" type="button" style="
+        width: 100%;
+        padding: 14px;
+        background-color: {{ block.settings.button_bg_color | default: '#000000' }};
+        color: {{ block.settings.button_text_color | default: '#ffffff' }};
+        border: none;
+        border-radius: 8px;
+        font-weight: bold;
+        cursor: pointer;
+        font-size: 16px;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        transition: opacity 0.2s;
+      " onmouseover="this.style.opacity='0.9'" onmouseout="this.style.opacity='1'">🐾 Sign In / Create Account</button>
+    </div>
+
     <form id="beauty-quiz-form" onsubmit="submitBeautyQuiz(event)">
-      <!-- Section 1: Skin Diagnostics -->
+
       <div class="beauty-quiz-section">
         <h3 style="margin-top: 0; margin-bottom: 12px; font-size: 15px; font-weight: 600; color: #1c1d1f; border-bottom: 1px solid #f1f2f4; padding-bottom: 8px;">✨ 1. Skin & Fragrance Profile</h3>
-        
+
         <div class="beauty-quiz-fields-grid columns-{{ block.settings.columns_desktop | default: '1' }}">
           <div class="form-group">
             <label for="beauty-skin-type">Skin Type</label>
@@ -137,7 +155,6 @@
         </div>
       </div>
 
-      <!-- Section 2: Advanced Diagnostics -->
       <div class="beauty-quiz-section" style="border-bottom: none; margin-bottom: 10px;">
         <h3 style="margin-top: 0; margin-bottom: 12px; font-size: 15px; font-weight: 600; color: #1c1d1f; border-bottom: 1px solid #f1f2f4; padding-bottom: 8px;">🌿 2. Personalization & Lifestyle Preferences</h3>
 
@@ -182,6 +199,21 @@
               <option value="cold">Cold / Dry</option>
             </select>
           </div>
+
+          <div class="form-group" style="grid-column: span {{ block.settings.columns_desktop | default: '1' }};">
+            <label for="beauty-zipcode">Zip / Postal Code</label>
+            <input type="text" id="beauty-zipcode" name="zipCode" placeholder="e.g. 90210" style="width: 100%; padding: 10px; border-radius: 6px; border: 1px solid #c9cccf; font-size: 14px; box-sizing: border-box;">
+            <p style="margin: 4px 0 0 0; font-size: 11px; color: #6d7175; line-height: 1.3;">Used to dynamically analyze local weather, UV indexes, and humidity to auto-tune your skincare formulation.</p>
+          </div>
+
+          <div class="form-group" style="grid-column: span {{ block.settings.columns_desktop | default: '1' }};">
+            <label for="beauty-allergens">Ingredient Allergens / Exclusions</label>
+            <div id="beauty-allergens-tag-container" style="display: flex; flex-wrap: wrap; gap: 6px; padding: 6px 10px; border: 1px solid #c9cccf; border-radius: 6px; background-color: #ffffff; min-height: 42px; box-sizing: border-box; cursor: text; align-items: center;">
+              <span id="beauty-allergens-chips" style="display: flex; flex-wrap: wrap; gap: 6px;"></span>
+              <input type="text" id="beauty-allergens-input" placeholder="Type allergen and press comma or Enter" style="border: none; outline: none; padding: 4px 0; font-size: 14px; flex-grow: 1; min-width: 150px; background: transparent;">
+            </div>
+            <p style="margin: 4px 0 0 0; font-size: 11px; color: #6d7175; line-height: 1.3;">We will strictly scan and block any products with matching ingredients from being curated in your boxes.</p>
+          </div>
         </div>
       </div>
 
@@ -192,8 +224,33 @@
     </form>
   </div>
 </div>
+</div>
 
 <style>
+  .beauty-tag-chip {
+    display: inline-flex;
+    align-items: center;
+    background-color: #f1f2f4;
+    color: #202223;
+    padding: 4px 8px;
+    border-radius: 12px;
+    font-size: 12px;
+    font-weight: 500;
+    gap: 4px;
+    border: 1px solid #e1e3e5;
+  }
+  .beauty-tag-chip-remove {
+    cursor: pointer;
+    font-weight: bold;
+    color: #6d7175;
+    font-size: 14px;
+    line-height: 1;
+    transition: color 0.15s;
+  }
+  .beauty-tag-chip-remove:hover {
+    color: #ff0000;
+  }
+
   .beauty-quiz-fields-grid {
     display: grid;
     grid-template-columns: 1fr;
@@ -293,6 +350,13 @@
 
 <script>
   (function() {
+
+    const oldModal = document.querySelector('body > #beauty-quiz-modal[data-block-id="{{ block.id }}"]');
+    if (oldModal) {
+      oldModal.remove();
+    }
+
+    const blockContainer = document.getElementById("beauty-effect-block-container-{{ block.id }}");
     const trigger = document.getElementById("beauty-quiz-trigger");
     const modal = document.getElementById("beauty-quiz-modal");
     const closeBtn = document.getElementById("beauty-quiz-close");
@@ -303,14 +367,95 @@
     const displayMode = "{{ block.settings.display_mode }}";
     const popupDelay = {{ block.settings.popup_delay | default: 3 }} * 1000;
 
-    // Portal relocation: Move modal block directly to document.body so it overlays perfectly over page content
+    const isCustomerLoggedIn = {% if customer %}true{% else %}false{% endif %};
+    const guestView = document.getElementById("beauty-quiz-guest-view");
+    const guestLoginBtn = document.getElementById("beauty-guest-login-btn");
+
+    if (!isCustomerLoggedIn) {
+      if (form) form.style.display = "none";
+      if (guestView) guestView.style.display = "block";
+      if (guestLoginBtn) {
+        guestLoginBtn.addEventListener("click", () => {
+          window.location.href = "/account/login?checkout_url=" + encodeURIComponent(window.location.href);
+        });
+      }
+    } else {
+      if (form) form.style.display = "block";
+      if (guestView) guestView.style.display = "none";
+    }
+
+    if (modal) {
+      if (embedLayout === "inline") {
+        if (blockContainer && modal.parentNode !== blockContainer) {
+          blockContainer.appendChild(modal);
+        }
+      } else {
+        if (modal.parentNode !== document.body) {
+          document.body.appendChild(modal);
+        }
+      }
+    }
+
+    window.beautyAllergensList = [];
+
+    const tagContainer = document.getElementById("beauty-allergens-tag-container");
+    const chipsWrapper = document.getElementById("beauty-allergens-chips");
+    const tagInput = document.getElementById("beauty-allergens-input");
+
+    function renderAllergensChips() {
+      if (!chipsWrapper) return;
+      chipsWrapper.innerHTML = window.beautyAllergensList.map((tag, idx) => `
+        <span class="beauty-tag-chip" data-idx="${idx}">
+          ${tag}
+          <span class="beauty-tag-chip-remove" onclick="removeAllergenTag(${idx})">&times;</span>
+        </span>
+      `).join("");
+    }
+
+    window.removeAllergenTag = function(idx) {
+      window.beautyAllergensList.splice(idx, 1);
+      renderAllergensChips();
+    };
+
+    function addAllergenFromInput() {
+      if (!tagInput) return;
+      let val = tagInput.value.trim().toLowerCase();
+      if (val.endsWith(",")) {
+        val = val.substring(0, val.length - 1).trim();
+      }
+      if (val && !window.beautyAllergensList.includes(val)) {
+        window.beautyAllergensList.push(val);
+        renderAllergensChips();
+      }
+      tagInput.value = "";
+    }
+
+    if (tagContainer && tagInput) {
+      tagContainer.addEventListener("click", () => {
+        tagInput.focus();
+      });
+
+      tagInput.addEventListener("keydown", (ev) => {
+        if (ev.key === "Enter" || ev.key === ",") {
+          ev.preventDefault();
+          addAllergenFromInput();
+        } else if (ev.key === "Backspace" && tagInput.value === "" && window.beautyAllergensList.length > 0) {
+          window.beautyAllergensList.pop();
+          renderAllergensChips();
+        }
+      });
+
+      tagInput.addEventListener("blur", () => {
+        addAllergenFromInput();
+      });
+    }
+
     if (embedLayout !== "inline") {
       if (modal && modal.parentNode !== document.body) {
         document.body.appendChild(modal);
       }
     }
 
-    // A. Global Click Listener for custom link triggers (.beauty-quiz-trigger or href="#beauty-quiz")
     document.addEventListener("click", (ev) => {
       const targetElement = ev.target.closest("#beauty-quiz-trigger, .beauty-quiz-trigger, a[href='#beauty-quiz'], a[href='#beauty-quiz-trigger']");
       if (targetElement && embedLayout !== "inline") {
@@ -319,28 +464,25 @@
 
         if (modal) {
           modal.style.display = "flex";
-          document.body.style.overflow = "hidden"; // Prevent background body scroll
+          document.body.style.overflow = "hidden";
         }
       }
     });
 
-    // B. Close Modal actions
     if (closeBtn && embedLayout !== "inline") {
       closeBtn.addEventListener("click", () => {
         if (modal) modal.style.display = "none";
         document.body.style.overflow = "auto";
-        sessionStorage.setItem("beauty-quiz-closed", "true"); // Store close token in session
+        sessionStorage.setItem("beauty-quiz-closed", "true");
       });
     }
 
-    // C. Automatic Pop-up triggers
     if (embedLayout !== "inline" && (displayMode === "popup" || displayMode === "both")) {
       setTimeout(() => {
         if (!modal) return;
         const hasClosedQuiz = sessionStorage.getItem("beauty-quiz-closed") === "true";
         const isDesignMode = window.Shopify && window.Shopify.designMode;
 
-        // Auto pops open unless they previously closed it in this session, or if merchant is in Theme Editor (designMode)
         if (modal.style.display !== "flex" && (!hasClosedQuiz || isDesignMode)) {
           modal.style.display = "flex";
           document.body.style.overflow = "hidden";
@@ -348,7 +490,6 @@
       }, popupDelay);
     }
 
-    // D. Shopify Theme Editor Native select events
     if (embedLayout !== "inline") {
       document.addEventListener("shopify:block:select", (event) => {
         if (event.detail.blockId === "{{ block.id }}" && modal) {
@@ -365,7 +506,6 @@
     }
   })();
 
-  // E. Form submission handler
   function submitBeautyQuiz(event) {
     event.preventDefault();
 
@@ -380,7 +520,6 @@
 
     const backendApiUrl = "{{ block.settings.api_url | default: 'https://glow-retention-git-develop-willowsoftstudio-5437s-projects.vercel.app' }}";
 
-    // Gather selected concerns
     const checkedConcerns = [];
     document.querySelectorAll('input[name="concerns"]:checked').forEach((cb) => {
       checkedConcerns.push(cb.value);
@@ -397,7 +536,9 @@
       preferredCategories: [document.getElementById("beauty-categories").value],
       ethicalPreferences: [document.getElementById("beauty-ethical").value],
       hairType: document.getElementById("beauty-hair").value,
-      localClimate: document.getElementById("beauty-climate").value
+      localClimate: document.getElementById("beauty-climate").value,
+      zipCode: document.getElementById("beauty-zipcode").value,
+      allergens: window.beautyAllergensList || []
     };
 
     submitBtn.disabled = true;
@@ -422,11 +563,9 @@
         successMsg.style.display = "block";
         submitBtn.innerText = "✨ Save My Beauty Profile";
         submitBtn.disabled = false;
-        
-        // Auto-scroll to success message
+
         successMsg.scrollIntoView({ behavior: "smooth", block: "center" });
 
-        // Auto hide success toast after 6 seconds
         setTimeout(() => {
           successMsg.style.display = "none";
         }, 6000);

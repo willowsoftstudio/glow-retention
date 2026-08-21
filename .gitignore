@@ -6,3 +6,6 @@ build/
 test-results/
 playwright-report/
 coverage/
+
+# Generated Prisma Client
+web/backend/prisma-client/

@@ -9,7 +9,11 @@
     "skipLibCheck": true,
     "resolveJsonModule": true,
     "outDir": "./dist",
-    "types": ["node", "vitest"]
+    "types": ["node", "vitest"],
+    "baseUrl": ".",
+    "paths": {
+      "@prisma/client": ["./web/backend/prisma-client"]
+    }
   },
   "include": ["web/**/*.ts", "extensions/**/*.ts", "tests/**/*.ts"]
 }
