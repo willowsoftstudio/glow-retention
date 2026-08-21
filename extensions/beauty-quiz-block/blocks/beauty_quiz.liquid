@@ -382,6 +382,72 @@
     } else {
       if (form) form.style.display = "block";
       if (guestView) guestView.style.display = "none";
+
+      (function() {
+        const customerId = "gid://shopify/Customer/{{ customer.id }}";
+        const shopDomain = "{{ shop.permanent_domain }}";
+        const backendApiUrl = "{{ block.settings.api_url | default: 'https://glow-retention-git-develop-willowsoftstudio-5437s-projects.vercel.app' }}";
+
+        fetch(backendApiUrl + "/api/storefront/customer-profile?customerId=" + encodeURIComponent(customerId) + "&shop=" + encodeURIComponent(shopDomain), {
+          headers: {
+            "x-test-session-id": "beauty-portal-session",
+            "x-shop-domain": shopDomain
+          }
+        })
+        .then(res => res.json())
+        .then(data => {
+          if (data && data.profile) {
+            const prof = data.profile;
+            console.log("[Glow Retention] Auto-hydrating customer skincare preferences:", prof);
+
+            if (prof.skinType) document.getElementById("beauty-skin-type").value = prof.skinType;
+            if (prof.fragrancePreference) document.getElementById("beauty-fragrance").value = prof.fragrancePreference;
+            if (prof.priceSensitivity) document.getElementById("beauty-price").value = prof.priceSensitivity;
+            if (prof.preferredCategories && prof.preferredCategories[0]) document.getElementById("beauty-categories").value = prof.preferredCategories[0];
+            if (prof.ethicalPreferences && prof.ethicalPreferences[0]) document.getElementById("beauty-ethical").value = prof.ethicalPreferences[0];
+            if (prof.hairType) document.getElementById("beauty-hair").value = prof.hairType;
+            if (prof.localClimate) document.getElementById("beauty-climate").value = prof.localClimate;
+            if (prof.zipCode) document.getElementById("beauty-zipcode").value = prof.zipCode;
+
+            if (prof.concerns) {
+              prof.concerns.forEach(concern => {
+                const cb = document.querySelector('input[name="concerns"][value="' + concern + '"]');
+                if (cb) cb.checked = true;
+              });
+            }
+
+            if (prof.allergens) {
+              window.beautyAllergensList = prof.allergens;
+              if (typeof renderAllergensChips === "function") {
+                renderAllergensChips();
+              }
+            }
+
+            const portalUrl = backendApiUrl + "/api/storefront/portal/view?customerId=" + encodeURIComponent(customerId) + "&shop=" + encodeURIComponent(shopDomain);
+            const portalBanner = document.createElement("div");
+            portalBanner.style.background = "linear-gradient(135deg, #f0f4ff 0%, #e2e8f0 100%)";
+            portalBanner.style.border = "1px solid #cbd5e0";
+            portalBanner.style.padding = "14px";
+            portalBanner.style.borderRadius = "8px";
+            portalBanner.style.marginBottom = "20px";
+            portalBanner.style.textAlign = "center";
+
+            let tierLabel = "STARTER Box ($30/mo)";
+            if (prof.subscription && prof.subscription.tier === "PRO") tierLabel = "PRO Box ($60/mo)";
+            if (prof.subscription && prof.subscription.tier === "ENTERPRISE") tierLabel = "ENTERPRISE Box ($120/mo)";
+
+            portalBanner.innerHTML = '<div style="font-weight: bold; font-size: 14px; color: #2c3e50; margin-bottom: 6px;">✨ Your Glow Subscription Active</div>' +
+              '<div style="font-size: 12px; color: #4a5568; margin-bottom: 10px;">Active Routine: <strong>' + tierLabel + '</strong></div>' +
+              '<a href="' + portalUrl + '" target="_blank" style="display: inline-block; padding: 8px 16px; background-color: #2b6cb0; color: #fff; border-radius: 6px; font-weight: bold; text-decoration: none; font-size: 13px;">📱 Manage Subscription Routine Portal</a>';
+
+            const formHeader = document.querySelector("#beauty-quiz-form h3") || form.firstChild;
+            if (formHeader) {
+              formHeader.parentNode.insertBefore(portalBanner, formHeader.nextSibling);
+            }
+          }
+        })
+        .catch(err => console.error("[Glow Retention] Failed to pre-fill customer profile:", err));
+      })();
     }
 
     if (modal) {

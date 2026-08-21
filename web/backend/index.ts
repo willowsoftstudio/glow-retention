@@ -376,6 +376,28 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
     }
   }
 
+  // GET /api/storefront/customer-profile (Retrieve active customer profile for storefront pre-filling)
+  app.get("/api/storefront/customer-profile", validateStorefrontSession, async (req, res) => {
+    try {
+      const session = req.body.session;
+      const shop = session.shop;
+      const { customerId } = req.query;
+
+      if (!customerId) {
+        return res.status(400).json({ error: "Missing customerId query parameter" });
+      }
+
+      const profile = await prisma.customerProfile.findFirst({
+        where: { customerId: customerId as string, shop },
+        include: { subscription: true }
+      });
+
+      res.json({ success: true, profile });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // POST /api/storefront/customer-profiles (Saves quiz responses directly from customer storefront - no admin auth)
   app.post("/api/storefront/customer-profiles", validateStorefrontSession, async (req, res) => {
     try {
@@ -937,7 +959,7 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
     root.render(e(CustomerPortal));
   </script>
 </body>
-</html>\`);
+</html>`);
     } catch (err: any) {
       res.status(500).send("<h3>Failed to load Glow Portal: " + err.message + "</h3>");
     }
