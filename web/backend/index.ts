@@ -851,8 +851,8 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
     const e = React.createElement;
 
     function CustomerPortal() {
-      const [contract, setContract] = React.useState(\\\${JSON.stringify(contract)});
-      const [profile, setProfile] = React.useState(\\\${JSON.stringify(profile)});
+      const [contract, setContract] = React.useState(${JSON.stringify(contract)});
+      const [profile, setProfile] = React.useState(${JSON.stringify(profile)});
       const [notification, setNotification] = React.useState(null);
 
       if (!contract) {
@@ -867,7 +867,7 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
           method: "POST",
           headers: { 
             "Content-Type": "application/json",
-            "x-shop-domain": "\\\${shop}",
+            "x-shop-domain": "${shop}",
             "x-test-session-id": "beauty-portal-session"
           },
           body: JSON.stringify({ contractId: contract.id, ...body })
