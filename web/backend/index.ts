@@ -922,7 +922,62 @@ app.get("/api/admin/inventory", async (req, res) => {
     const analytics = await prisma.inventoryAnalytics.findMany({
       orderBy: { retentionValue: "desc" }
     });
-    res.json(analytics);
+
+    let realProductMap: Record<string, string> = {};
+    try {
+      const client = new shopify.api.clients.Graphql({ session });
+      const gqlResponse: any = await client.request(
+        `query {
+          products(first: 50) {
+            edges {
+              node {
+                title
+                variants(first: 10) {
+                  edges {
+                    node {
+                      id
+                      title
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }`
+      );
+      const productEdges = gqlResponse.data?.products?.edges || [];
+      for (const pEdge of productEdges) {
+        const pNode = pEdge.node;
+        const vEdges = pNode.variants?.edges || [];
+        for (const vEdge of vEdges) {
+          const vNode = vEdge.node;
+          const vTitle = vNode.title && vNode.title !== "Default Title" ? ` - ${vNode.title}` : "";
+          realProductMap[vNode.id] = `${pNode.title}${vTitle}`;
+        }
+      }
+    } catch (gqlErr) {
+      console.warn("[GraphQL Warning] Failed to fetch product titles for inventory list:", gqlErr);
+    }
+
+    const decoratedAnalytics = analytics.map((item: any) => {
+      let name = realProductMap[item.productId];
+      if (!name) {
+        if (item.productId === "gid://shopify/ProductVariant/5001" || item.productId === "Vitamin C Serum (9001)") {
+          name = "Vitamin C Serum";
+        } else if (item.productId === "gid://shopify/ProductVariant/5002" || item.productId === "Charcoal Face Mask (9002)") {
+          name = "Charcoal Face Mask";
+        } else {
+          name = item.productId;
+        }
+      }
+      return {
+        ...item,
+        productName: name,
+        title: name
+      };
+    });
+
+    res.json(decoratedAnalytics);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -1301,15 +1356,15 @@ app.get("/", (req, res) => {
           status: "SUGGESTED",
           margin: 55.4,
           suggestedItems: [
-            { variantId: "gid://shopify/ProductVariant/5001", score: 95, reason: "Matches dry skin concern + High repeat purchase" },
-            { variantId: "gid://shopify/ProductVariant/5002", score: 88, reason: "Sourced locally, maintains 55% target margins" }
+            { variantId: "gid://shopify/ProductVariant/5001", productName: "Vitamin C Serum (5001)", score: 95, reason: "Matches dry skin concern + High repeat purchase" },
+            { variantId: "gid://shopify/ProductVariant/5002", productName: "Charcoal Face Mask (5002)", score: 88, reason: "Sourced locally, maintains 55% target margins" }
           ]
         }
       ]);
 
       const [inventory, setInventory] = React.useState([
-        { productId: "Vitamin C Serum (9001)", retentionValue: 84.6, returnRate: 2.1, satisfaction: 4.8, margin: 62.0, stockLevel: 1200, stockRisk: "LOW" },
-        { productId: "Charcoal Face Mask (9002)", retentionValue: 14.2, returnRate: 35.8, satisfaction: 2.3, margin: 38.0, stockLevel: 2500, stockRisk: "HIGH" }
+        { productId: "gid://shopify/ProductVariant/5001", productName: "Vitamin C Serum (5001)", retentionValue: 84.6, returnRate: 2.1, satisfaction: 4.8, margin: 62.0, price: 30.0, cost: 11.4, stockLevel: 1200, stockRisk: "LOW" },
+        { productId: "gid://shopify/ProductVariant/5002", productName: "Charcoal Face Mask (5002)", retentionValue: 14.2, returnRate: 35.8, satisfaction: 2.3, margin: 38.0, price: 25.0, cost: 15.5, stockLevel: 2500, stockRisk: "HIGH" }
       ]);
 
       const [quizSkinType, setQuizSkinType] = React.useState("dry");
@@ -1327,6 +1382,34 @@ app.get("/", (req, res) => {
       const [manualQuizName, setManualQuizName] = React.useState("New Subscriber");
       const [manualQuizEmail, setManualQuizEmail] = React.useState("new@subscriber.com");
       const [manualQuizGid, setManualQuizGid] = React.useState("gid://shopify/Customer/1003");
+
+      // Helper to format/strip variant GIDs in UI
+      const formatProductName = (idOrName) => {
+        if (!idOrName) return "Unknown Product";
+
+        const matched = inventory.find(inv => inv.productId === idOrName);
+        if (matched && matched.productName && matched.productName !== idOrName) {
+          return matched.productName;
+        }
+        if (matched && matched.title && matched.title !== idOrName) {
+          return matched.title;
+        }
+
+        if (idOrName.startsWith("gid://")) {
+          const friendlyNames = {
+            "gid://shopify/ProductVariant/5001": "Vitamin C Serum",
+            "gid://shopify/ProductVariant/5002": "Charcoal Face Mask"
+          };
+          if (friendlyNames[idOrName]) {
+            return friendlyNames[idOrName];
+          }
+
+          const parts = idOrName.split("/");
+          const lastPart = parts[parts.length - 1];
+          return "Product Variant #" + lastPart;
+        }
+        return idOrName;
+      };
 
       React.useEffect(() => {
         const selectedProfile = profiles.find(p => p.customerId === selectedQuizCustomerId);
@@ -1389,15 +1472,15 @@ app.get("/", (req, res) => {
       const handleSwapProduct = (curationId, itemIdx, newProdId) => {
         const chosenProduct = inventory.find(inv => inv.productId === newProdId);
         if (!chosenProduct) return;
-        
+
         const updatedCurations = curations.map(c => {
           if (c.id !== curationId) return c;
-          
+
           const items = typeof c.suggestedItems === "string" ? JSON.parse(c.suggestedItems) : [...c.suggestedItems];
-          
+
           items[itemIdx] = {
             variantId: chosenProduct.productId,
-            productName: chosenProduct.productId,
+            productName: chosenProduct.productName || chosenProduct.title || chosenProduct.productId,
             score: Math.round(chosenProduct.satisfaction * 20) || 85,
             reason: "Manually customized by merchant"
           };
@@ -1689,20 +1772,6 @@ app.get("/", (req, res) => {
           );
         }
 
-        // Helper to format/strip variant GIDs in UI
-        const formatProductName = (idOrName) => {
-          if (!idOrName) return "Unknown Product";
-          if (idOrName.startsWith("gid://")) {
-            const matched = inventory.find(inv => inv.productId === idOrName);
-            if (matched) return formatProductName(matched.productId);
-            
-            const parts = idOrName.split("/");
-            const lastPart = parts[parts.length - 1];
-            return "Product Variant #" + lastPart;
-          }
-          return idOrName;
-        };
-
         return e("div", null,
           e("div", { className: "card", style: { marginBottom: "20px" } },
             e("h3", { style: { fontSize: "16px", fontWeight: "600", marginBottom: "12px" } }, "🎯 AI Curation Margin & Price Settings"),
@@ -1858,7 +1927,7 @@ app.get("/", (req, res) => {
                 inventory.map((inv, idx) => {
                   const riskColor = inv.stockRisk === "HIGH" ? "#ff0000" : "#00875a";
                   return e("tr", { key: idx },
-                    e("td", { style: { fontWeight: "500" } }, inv.productId),
+                    e("td", { style: { fontWeight: "500" } }, formatProductName(inv.productName || inv.productId)),
                     e("td", { style: { color: "#00875a", fontWeight: "600" } }, inv.retentionValue + "%"),
                     e("td", { style: { color: inv.returnRate > 20 ? "#ff0000" : "inherit" } }, inv.returnRate + "%"),
                     e("td", null, inv.satisfaction + " / 5"),
