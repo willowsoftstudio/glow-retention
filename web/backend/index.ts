@@ -2288,7 +2288,7 @@ app.get("/", (req, res) => {
             if (data) {
               const customerName = profiles.find(p => p.customerId === selectedPortalCustomerId)?.name || "Glowgetter";
               setSmsMessages([
-                { sender: "bot", text: "Hey " + customerName + "! GlowBot here. 🌟 Your routine order is preparing to ship in 3 days! \n\nReply:\n1 to Postpone 30 Days\n2 to Skip Next Box\n3 to Swap your product\n4 to Add-on a Charcoal Mask" }
+                { sender: "bot", text: "Hey " + customerName + "! GlowBot here. 🌟 Your routine order is preparing to ship in 3 days! \\n\\nReply:\\n1 to Postpone 30 Days\\n2 to Skip Next Box\\n3 to Swap your product\\n4 to Add-on a Charcoal Mask" }
               ]);
             } else {
               setSmsMessages([
@@ -3056,7 +3056,7 @@ app.get("/", (req, res) => {
               botText = "GlowBot: Added! 🛍️ Barrier Restore Moisturizer added to your upcoming box. Thank you!";
               addMoisturizerAddOn();
             } else if (cmd.toLowerCase() === "help") {
-              botText = "GlowBot Options:\n1 - Delay 30 Days\n2 - Skip Next Box\n3 - Swap Serum for gentle formula\n4 - Add-on Moisturizer";
+              botText = "GlowBot Options:\\n1 - Delay 30 Days\\n2 - Skip Next Box\\n3 - Swap Serum for gentle formula\\n4 - Add-on Moisturizer";
             }
             setSmsMessages([...updated, { sender: "bot", text: botText }]);
           }, 800);
