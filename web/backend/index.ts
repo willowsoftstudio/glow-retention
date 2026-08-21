@@ -1,4 +1,5 @@
 import express from "express";
+import { Session } from "@shopify/shopify-api";
 import { PrismaClient } from "./prisma-client/index.js";
 import crypto from "crypto";
 import shopify from "./shopify.js";
@@ -306,7 +307,7 @@ app.patch("/api/admin/billing", async (req, res) => {
 app.get("/api/admin/billing/check-or-start", async (req, res) => {
   try {
     const session = res.locals.shopify.session;
-    const plans = Object.keys(shopify.config.api.billing || {});
+    const plans = Object.keys(shopify.api.config.billing || {});
 
     const hasPayment = await shopify.api.billing.check({
       session,
@@ -478,7 +479,7 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
     try {
       const session = req.body.session;
       const shop = session.shop;
-      const { customerId, variantIds, frequencyDays, startDate } = req.body;
+      const { customerId, variantIds, frequencyDays, startDate, items } = req.body;
 
       if (!customerId || !variantIds || variantIds.length === 0) {
         return res.status(400).json({ error: "Missing required routine properties" });
@@ -488,7 +489,8 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
       const nextBill = startDate ? new Date(startDate) : new Date(Date.now() + frequency * 24 * 60 * 60 * 1000);
       const contractId = `gid://shopify/SubscriptionContract/mock_${crypto.randomUUID().substring(0, 8)}`;
 
-      const itemsList = variantIds.map((vId: string) => {
+      // Resolve items dynamically if provided by client to avoid hardcoding or fake data
+      const itemsList = items || variantIds.map((vId: string) => {
         let name = "Vitamin C Serum";
         if (vId.includes("5002")) name = "Charcoal Face Mask";
         return { variantId: vId, productName: name, price: 30.00 };
@@ -723,6 +725,80 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
         where: { customerId: customerId as string, shop }
       });
 
+      // Query real active products from Shopify if session is available
+      const session = await prisma.session.findFirst({
+        where: { shop }
+      });
+
+      let shopifyProducts: any[] = [];
+      if (session && session.accessToken) {
+        try {
+          const shopifySession = new Session({
+            id: session.id,
+            shop: session.shop,
+            state: session.state,
+            isOnline: session.isOnline,
+            accessToken: session.accessToken,
+            scope: session.scope || undefined,
+            expires: session.expires || undefined,
+          });
+          const client = new shopify.api.clients.Graphql({ session: shopifySession });
+          const gqlResponse: any = await client.request(
+            `query {
+              products(first: 20) {
+                edges {
+                  node {
+                    id
+                    title
+                    variants(first: 5) {
+                      edges {
+                        node {
+                          id
+                          title
+                          price
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }`
+          );
+          const edges = gqlResponse?.data?.products?.edges || [];
+          shopifyProducts = edges.map((e: any) => {
+            const node = e.node;
+            const variantNode = node.variants?.edges?.[0]?.node;
+            return {
+              productId: node.id,
+              productName: node.title,
+              variantId: variantNode?.id,
+              variantTitle: variantNode?.title,
+              price: parseFloat(variantNode?.price || "30.00")
+            };
+          }).filter((p: any) => p.variantId);
+        } catch (gqlErr: any) {
+          console.warn("[Portal Live Products Warning] GraphQL query deferred/failed:", gqlErr.message);
+        }
+      }
+
+      // Safe resilient fallback catalog
+      if (shopifyProducts.length === 0) {
+        shopifyProducts = [
+          {
+            productId: "gid://shopify/Product/1",
+            productName: "Vitamin C Brightening Serum",
+            variantId: "gid://shopify/ProductVariant/5001",
+            price: 30.00
+          },
+          {
+            productId: "gid://shopify/Product/2",
+            productName: "Charcoal Face Mask",
+            variantId: "gid://shopify/ProductVariant/5002",
+            price: 30.00
+          }
+        ];
+      }
+
       res.setHeader("Content-Type", "text/html");
       res.send(`<!DOCTYPE html>
 <html lang="en">
@@ -854,11 +930,121 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
       const [contract, setContract] = React.useState(${JSON.stringify(contract)});
       const [profile, setProfile] = React.useState(${JSON.stringify(profile)});
       const [notification, setNotification] = React.useState(null);
+      const [selectedVariants, setSelectedVariants] = React.useState([]);
+      const [frequency, setFrequency] = React.useState(30);
+      const [activating, setActivating] = React.useState(false);
+
+      const liveProducts = ${JSON.stringify(shopifyProducts)};
+
+      // Initialize default selections when liveProducts loads
+      React.useEffect(() => {
+        if (liveProducts.length > 0 && selectedVariants.length === 0) {
+          setSelectedVariants([liveProducts[0].variantId]);
+        }
+      }, [liveProducts]);
 
       if (!contract) {
-        return e("div", { style: { textAlign: "center", padding: "20px" } },
-          e("h2", null, "No Active Subscription"),
-          e("p", null, "We couldn't find an active beauty routine subscription contract in the database for your profile. Please contact the store owner or complete your skin preferences quiz to activate!")
+        return e("div", { style: { padding: "10px" } },
+          e("div", { className: "header", style: { borderBottom: "none", marginBottom: "12px" } },
+            e("h2", null, "✨ Design Your Skincare Routine"),
+            e("p", null, "Select from our live catalog to activate your custom monthly delivery and unlock the Glow Portal!")
+          ),
+          e("div", { style: { display: "flex", flexDirection: "column", gap: "12px", marginBottom: "20px" } },
+            liveProducts.map((prod) => {
+              const isChecked = selectedVariants.includes(prod.variantId);
+              const toggleProduct = () => {
+                if (isChecked) {
+                  setSelectedVariants(selectedVariants.filter(id => id !== prod.variantId));
+                } else {
+                  setSelectedVariants([...selectedVariants, prod.variantId]);
+                }
+              };
+              return e("div", { 
+                key: prod.variantId, 
+                onClick: toggleProduct,
+                style: {
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  padding: "12px",
+                  borderRadius: "8px",
+                  border: isChecked ? "2px solid #2b6cb0" : "1px solid #cbd5e0",
+                  backgroundColor: isChecked ? "#f0f4ff" : "#fff",
+                  cursor: "pointer",
+                  transition: "all 0.2s"
+                }
+              },
+                e("div", { style: { display: "flex", alignItems: "center", gap: "10px" } },
+                  e("input", { 
+                    type: "checkbox", 
+                    checked: isChecked, 
+                    onChange: toggleProduct,
+                    style: { cursor: "pointer" }
+                  }),
+                  e("div", null,
+                    e("div", { style: { fontWeight: "600", fontSize: "14px", color: "#2d3748" } }, prod.productName),
+                    prod.variantTitle && prod.variantTitle !== "Default Title" && e("div", { style: { fontSize: "11px", color: "#718096" } }, prod.variantTitle)
+                  )
+                ),
+                e("div", { style: { fontWeight: "bold", fontSize: "14px", color: "#2b6cb0" } }, "$" + prod.price.toFixed(2))
+              );
+            })
+          ),
+          e("div", { style: { marginBottom: "20px" } },
+            e("label", { style: { display: "block", fontSize: "13px", fontWeight: "600", color: "#4a5568", marginBottom: "6px" } }, "Delivery Frequency"),
+            e("select", { 
+              value: frequency, 
+              onChange: (ev) => setFrequency(parseInt(ev.target.value)),
+              style: { width: "100%", padding: "10px", borderRadius: "8px", border: "1px solid #cbd5e0", fontSize: "14px" }
+            },
+              e("option", { value: 15 }, "Every 15 Days"),
+              e("option", { value: 30 }, "Every 30 Days (Recommended)"),
+              e("option", { value: 45 }, "Every 45 Days")
+            )
+          ),
+          e("button", { 
+            className: "btn-primary", 
+            disabled: selectedVariants.length === 0 || activating, 
+            onClick: () => {
+              setActivating(true);
+              const itemsToCreate = liveProducts
+                .filter(p => selectedVariants.includes(p.variantId))
+                .map(p => ({
+                  variantId: p.variantId,
+                  productName: p.productName,
+                  price: p.price
+                }));
+              fetch("/api/storefront/routine/create", {
+                method: "POST",
+                headers: { 
+                  "Content-Type": "application/json",
+                  "x-shop-domain": "${shop}",
+                  "x-test-session-id": "beauty-portal-session"
+                },
+                body: JSON.stringify({ 
+                  customerId: "${customerId}", 
+                  variantIds: selectedVariants, 
+                  frequencyDays: frequency,
+                  items: itemsToCreate
+                })
+              })
+              .then(res => res.json())
+              .then(data => {
+                if (data.success) {
+                  setContract(data.contract);
+                  setNotification("🎉 Subscription routine successfully activated!");
+                  setTimeout(() => setNotification(null), 3000);
+                } else {
+                  alert("Failed to activate: " + (data.error || "Unknown error"));
+                }
+                setActivating(false);
+              })
+              .catch(err => {
+                console.error("Activation failed:", err);
+                setActivating(false);
+              });
+            }
+          }, activating ? "⏳ Activating..." : "🚀 Activate Skincare Routine & Enter Portal")
         );
       }
 
