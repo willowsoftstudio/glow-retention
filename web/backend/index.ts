@@ -1728,7 +1728,7 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
         e("div", { className: "header", style: { borderBottom: "none", marginBottom: "16px", display: "flex", justifyContent: "space-between", alignItems: "center" } },
           e("div", null,
             e("h2", { style: { margin: 0, fontSize: "22px", fontWeight: "800", color: "#2d3748" } }, "🌟 The Glow Headquarters"),
-            e("p", style: { margin: "2px 0 0 0", color: "#718096", fontSize: "13px" } }, "Personalize, build, and optimize your routine bundle.")
+            e("p", { style: { margin: "2px 0 0 0", color: "#718096", fontSize: "13px" } }, "Personalize, build, and optimize your routine bundle.")
           ),
           contract && e("span", { className: "badge badge-" + contract.status.toLowerCase() }, contract.status)
         ),
