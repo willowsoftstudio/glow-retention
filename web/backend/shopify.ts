@@ -10,10 +10,31 @@ export class LocalPrismaSessionStorage implements SessionStorage {
 
   public async storeSession(session: Session): Promise<boolean> {
     const data = this.sessionToRow(session);
+    
+    const existing = await this.client.session.findFirst({
+      where: { shop: session.shop }
+    });
+
+    const settingsData = {
+      boxPriceLow: existing?.boxPriceLow ?? 30.0,
+      boxPriceMedium: existing?.boxPriceMedium ?? 60.0,
+      boxPriceHigh: existing?.boxPriceHigh ?? 120.0,
+      targetMargin: existing?.targetMargin ?? 55.0,
+      milestoneOrderCount: existing?.milestoneOrderCount ?? 3,
+      giftVariantIds: existing?.giftVariantIds ?? "[]",
+      enableSafetyGuard: existing?.enableSafetyGuard ?? true
+    };
+
     await this.client.session.upsert({
       where: { id: session.id },
-      update: data,
-      create: data,
+      update: {
+        ...data,
+        ...settingsData
+      },
+      create: {
+        ...data,
+        ...settingsData
+      },
     });
     return true;
   }

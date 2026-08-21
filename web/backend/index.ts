@@ -683,6 +683,266 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
     }
   });
 
+  // GET /api/storefront/portal/view (Standalone Live Customer-Facing Portal Webpage!)
+  app.get("/api/storefront/portal/view", async (req, res) => {
+    try {
+      const { customerId, shop: queryShop } = req.query;
+      const shop = (queryShop as string) || "beauty-e2e-shop.myshopify.com";
+
+      if (!customerId) {
+        return res.status(400).send("<h3>Missing customerId query parameter</h3>");
+      }
+
+      const profile = await prisma.customerProfile.findFirst({
+        where: { customerId: customerId as string, shop }
+      });
+
+      const contract = await prisma.subscriptionContract.findFirst({
+        where: { customerId: customerId as string, shop }
+      });
+
+      res.setHeader("Content-Type", "text/html");
+      res.send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>The Glow Portal — Customer Subscription Console</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      margin: 0;
+      padding: 0;
+      background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+      min-height: 100vh;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+    }
+    #app {
+      width: 100%;
+      max-width: 420px;
+      margin: 20px;
+      background: white;
+      border-radius: 16px;
+      box-shadow: 0 8px 30px rgba(0,0,0,0.1);
+      padding: 24px;
+      box-sizing: border-box;
+    }
+    .header {
+      text-align: center;
+      border-bottom: 1px solid #eaeaea;
+      padding-bottom: 16px;
+      margin-bottom: 20px;
+    }
+    .header h2 {
+      margin: 0;
+      color: #2c3e50;
+      font-size: 20px;
+    }
+    .header p {
+      margin: 4px 0 0 0;
+      color: #7f8c8d;
+      font-size: 13px;
+    }
+    .badge {
+      display: inline-block;
+      padding: 4px 8px;
+      border-radius: 12px;
+      font-size: 11px;
+      font-weight: bold;
+      text-transform: uppercase;
+      margin-top: 8px;
+    }
+    .badge-active { background-color: #e2f1e8; color: #1e5128; }
+    .badge-paused { background-color: #fff3cd; color: #856404; }
+    .section-title {
+      font-size: 13px;
+      font-weight: bold;
+      color: #34495e;
+      text-transform: uppercase;
+      margin-bottom: 8px;
+      letter-spacing: 0.5px;
+    }
+    .card {
+      background: #f8f9fa;
+      border: 1px solid #e9ecef;
+      border-radius: 8px;
+      padding: 12px;
+      margin-bottom: 16px;
+    }
+    .item-row {
+      display: flex;
+      justify-content: space-between;
+      font-size: 13px;
+      padding: 6px 0;
+      border-bottom: 1px solid #f1f3f5;
+    }
+    .item-row:last-child {
+      border-bottom: none;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+    button {
+      padding: 10px;
+      border-radius: 8px;
+      border: none;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    .btn-primary {
+      background: #2b6cb0;
+      color: white;
+      width: 100%;
+    }
+    .btn-secondary {
+      background: #edf2f7;
+      color: #2d3748;
+      border: 1px solid #cbd5e0;
+    }
+    .btn-secondary:hover {
+      background: #e2e8f0;
+    }
+    .notification {
+      background-color: #d4edda;
+      color: #155724;
+      border: 1px solid #c3e6cb;
+      padding: 10px;
+      border-radius: 8px;
+      margin-bottom: 16px;
+      font-size: 13px;
+      text-align: center;
+    }
+  </style>
+  <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+</head>
+<body>
+  <div id="app"></div>
+  <script>
+    const e = React.createElement;
+
+    function CustomerPortal() {
+      const [contract, setContract] = React.useState(\\\${JSON.stringify(contract)});
+      const [profile, setProfile] = React.useState(\\\${JSON.stringify(profile)});
+      const [notification, setNotification] = React.useState(null);
+
+      if (!contract) {
+        return e("div", { style: { textAlign: "center", padding: "20px" } },
+          e("h2", null, "No Active Subscription"),
+          e("p", null, "We couldn't find an active beauty routine subscription contract in the database for your profile. Please contact the store owner or complete your skin preferences quiz to activate!")
+        );
+      }
+
+      const triggerAction = (endpoint, body) => {
+        fetch(endpoint, {
+          method: "POST",
+          headers: { 
+            "Content-Type": "application/json",
+            "x-shop-domain": "\\\${shop}",
+            "x-test-session-id": "beauty-portal-session"
+          },
+          body: JSON.stringify({ contractId: contract.id, ...body })
+        })
+        .then(res => res.json())
+        .then(data => {
+          if (data.success) {
+            setContract(data.contract || data.updated);
+            setNotification("🌟 Subscription successfully updated!");
+            setTimeout(() => setNotification(null), 3000);
+          }
+        })
+        .catch(err => console.error("Action failed:", err));
+      };
+
+      const skipBox = () => triggerAction("/api/storefront/portal/postpone", { days: 30 });
+      const delayBox = () => triggerAction("/api/storefront/portal/postpone", { days: 15 });
+      const swapProduct = () => {
+        const items = typeof contract.items === "string" ? JSON.parse(contract.items) : contract.items;
+        const currentSerum = items.find(it => it.variantId.includes("5001"));
+        const oldId = currentSerum ? "gid://shopify/ProductVariant/5001" : "gid://shopify/ProductVariant/5002";
+        const newId = currentSerum ? "gid://shopify/ProductVariant/5002" : "gid://shopify/ProductVariant/5001";
+        triggerAction("/api/storefront/portal/swap", { oldVariantId: oldId, newVariantId: newId });
+      };
+      const togglePause = () => {
+        const endpoint = contract.status === "PAUSED" ? "/api/storefront/portal/resume" : "/api/storefront/portal/pause";
+        triggerAction(endpoint);
+      };
+      const setFrequency = (days) => triggerAction("/api/storefront/portal/frequency", { frequencyDays: days });
+      const addMoisturizer = () => triggerAction("/api/storefront/portal/add-on", {
+        variantId: "gid://shopify/ProductVariant/5003",
+        productName: "Barrier Restore Moisturizer",
+        price: "25.00"
+      });
+
+      const items = typeof contract.items === "string" ? JSON.parse(contract.items) : contract.items;
+
+      const formatName = (idOrName) => {
+        if (idOrName === "gid://shopify/ProductVariant/5001") return "Vitamin C Serum";
+        if (idOrName === "gid://shopify/ProductVariant/5002") return "Charcoal Face Mask";
+        if (idOrName === "gid://shopify/ProductVariant/5003") return "Barrier Restore Moisturizer";
+        return idOrName;
+      };
+
+      return e("div", null,
+        e("div", { className: "header" },
+          e("h2", null, "🌟 The Glow Portal"),
+          e("p", null, "Manage Your Personal Skincare Routine"),
+          e("span", { className: "badge badge-" + contract.status.toLowerCase() }, contract.status)
+        ),
+
+        notification && e("div", { className: "notification" }, notification),
+
+        e("div", null,
+          e("div", { className: "section-title" }, "Delivery Schedule"),
+          e("div", { className: "card" },
+            e("div", { style: { fontSize: "12px", color: "#6d7175" } }, "Next Shipment Date"),
+            e("div", { style: { fontSize: "16px", fontWeight: "bold", color: "#2c3e50", marginTop: "2px" } }, new Date(contract.nextBillDate).toLocaleDateString()),
+            e("div", { style: { fontSize: "12px", color: "#6d7175", marginTop: "4px" } }, "Delivery: every " + contract.frequencyDays + " days")
+          )
+        ),
+
+        e("div", null,
+          e("div", { className: "section-title" }, "Skincare Bundle Items"),
+          e("div", { className: "card" },
+            items.map((it, idx) => e("div", { key: idx, className: "item-row" },
+              e("span", { style: { fontWeight: "500" } }, formatName(it.productName || it.variantId) + (it.isAddOn ? " (Add-On)" : "")),
+              e("span", null, "$" + parseFloat(it.price).toFixed(2))
+            ))
+          )
+        ),
+
+        e("div", { className: "grid" },
+          e("button", { className: "btn-secondary", onClick: skipBox }, "⏭️ Skip Box"),
+          e("button", { className: "btn-secondary", onClick: delayBox }, "📅 Delay 15d")
+        ),
+        e("div", { className: "grid" },
+          e("button", { className: "btn-secondary", onClick: swapProduct }, "🔄 Swap Serum"),
+          e("button", { className: "btn-secondary", onClick: togglePause }, contract.status === "PAUSED" ? "▶️ Resume" : "⏸️ Pause Subscription")
+        ),
+        e("div", { className: "grid" },
+          e("button", { className: "btn-secondary", onClick: () => setFrequency(45) }, "⚙️ Set 45d Delivery"),
+          e("button", { className: "btn-primary", onClick: addMoisturizer }, "🛍️ + Moisturizer Add-on")
+        )
+      );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById("app"));
+    root.render(e(CustomerPortal));
+  </script>
+</body>
+</html>\`);
+    } catch (err: any) {
+      res.status(500).send("<h3>Failed to load Glow Portal: " + err.message + "</h3>");
+    }
+  });
+
   // GET /api/admin/subscription-contracts/:customerId (Retrieve live contract from database)
   app.get("/api/admin/subscription-contracts/:customerId", checkSession(), async (req, res) => {
     try {
@@ -2499,18 +2759,18 @@ app.get("/", (req, res) => {
         return e("div", null,
           e("div", { className: "card", style: { marginBottom: "20px" } },
             e("h3", { style: { fontSize: "16px", fontWeight: "600", marginBottom: "12px" } }, "🎯 AI Curation Margin & Price Settings"),
-            e("p", { style: { color: "#6d7175", marginBottom: "20px", fontSize: "13px" } }, "Configure the target box price for each price sensitivity tier and your desired target margin. The AI Curation Engine will automatically optimize product matching to stay within these parameters."),
+            e("p", { style: { color: "#6d7175", marginBottom: "20px", fontSize: "13px" } }, "Configure the target box price for each Subscription Box Tier (Starter, Pro, Enterprise) and your desired target margin. The AI Curation Engine will automatically optimize product matching to stay within these parameters."),
             e("div", { style: { display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "16px", marginBottom: "20px" } },
               e("div", null,
-                e("label", { style: { display: "block", fontWeight: "600", fontSize: "12px", marginBottom: "4px" } }, "Value Tier Price ($)"),
+                e("label", { style: { display: "block", fontWeight: "600", fontSize: "12px", marginBottom: "4px" } }, "STARTER Box Tier Price ($)"),
                 e("input", { type: "number", value: settingsLow, onChange: (e) => setSettingsLow(e.target.value), style: { width: "100%", padding: "6px", borderRadius: "4px", border: "1px solid #8c9196", fontSize: "13px" } })
               ),
               e("div", null,
-                e("label", { style: { display: "block", fontWeight: "600", fontSize: "12px", marginBottom: "4px" } }, "Balanced Tier Price ($)"),
+                e("label", { style: { display: "block", fontWeight: "600", fontSize: "12px", marginBottom: "4px" } }, "PRO Box Tier Price ($)"),
                 e("input", { type: "number", value: settingsMedium, onChange: (e) => setSettingsMedium(e.target.value), style: { width: "100%", padding: "6px", borderRadius: "4px", border: "1px solid #8c9196", fontSize: "13px" } })
               ),
               e("div", null,
-                e("label", { style: { display: "block", fontWeight: "600", fontSize: "12px", marginBottom: "4px" } }, "Luxury Tier Price ($)"),
+                e("label", { style: { display: "block", fontWeight: "600", fontSize: "12px", marginBottom: "4px" } }, "ENTERPRISE Box Tier Price ($)"),
                 e("input", { type: "number", value: settingsHigh, onChange: (e) => setSettingsHigh(e.target.value), style: { width: "100%", padding: "6px", borderRadius: "4px", border: "1px solid #8c9196", fontSize: "13px" } })
               ),
               e("div", null,
@@ -3111,15 +3371,26 @@ app.get("/", (req, res) => {
         };
 
         const renderCustomerSelector = () => {
+          const shopDomain = profiles.find(p => p.customerId === selectedPortalCustomerId)?.shop || "beauty-e2e-shop.myshopify.com";
+          const portalUrl = selectedPortalCustomerId ? ("/api/storefront/portal/view?customerId=" + encodeURIComponent(selectedPortalCustomerId) + "&shop=" + encodeURIComponent(shopDomain)) : "#";
+
           return e("div", { style: { marginBottom: "20px", width: "100%" } },
             e("label", { style: { display: "block", fontWeight: "bold", marginBottom: "6px", fontSize: "14px", color: "#2c3e50" } }, "Select Active Subscriber Profile"),
-            e("select", { 
-              value: selectedPortalCustomerId, 
-              onChange: (e) => setSelectedPortalCustomerId(e.target.value), 
-              style: { width: "100%", padding: "10px", borderRadius: "6px", border: "1px solid #cbd5e0", fontSize: "14px" } 
-            },
-              e("option", { value: "" }, "Select a Subscriber..."),
-              profiles.map(p => e("option", { key: p.id, value: p.customerId }, p.name + " (" + p.email + ")"))
+            e("div", { style: { display: "flex", gap: "10px" } },
+              e("select", { 
+                value: selectedPortalCustomerId, 
+                onChange: (e) => setSelectedPortalCustomerId(e.target.value), 
+                style: { flex: 1, padding: "10px", borderRadius: "6px", border: "1px solid #cbd5e0", fontSize: "14px" } 
+              },
+                e("option", { value: "" }, "Select a Subscriber..."),
+                profiles.map(p => e("option", { key: p.id, value: p.customerId }, p.name + " (" + p.email + ")"))
+              ),
+              selectedPortalCustomerId && portalContract && e("a", { 
+                href: portalUrl, 
+                target: "_blank", 
+                className: "button-primary", 
+                style: { display: "flex", alignItems: "center", justifyContent: "center", textDecoration: "none", fontSize: "13px", padding: "10px 16px", borderRadius: "6px" } 
+              }, "🔗 Open Customer Portal Page")
             )
           );
         };
