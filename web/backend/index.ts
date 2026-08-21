@@ -750,6 +750,13 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
                   node {
                     id
                     title
+                    images(first: 1) {
+                      edges {
+                        node {
+                          url
+                        }
+                      }
+                    }
                     variants(first: 5) {
                       edges {
                         node {
@@ -767,13 +774,15 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
           const edges = gqlResponse?.data?.products?.edges || [];
           shopifyProducts = edges.map((e: any) => {
             const node = e.node;
+            const imageUrl = node.images?.edges?.[0]?.node?.url || "";
             const variantNode = node.variants?.edges?.[0]?.node;
             return {
               productId: node.id,
               productName: node.title,
               variantId: variantNode?.id,
               variantTitle: variantNode?.title,
-              price: parseFloat(variantNode?.price || "30.00")
+              price: parseFloat(variantNode?.price || "30.00"),
+              imageUrl
             };
           }).filter((p: any) => p.variantId);
         } catch (gqlErr: any) {
@@ -788,13 +797,15 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
             productId: "gid://shopify/Product/1",
             productName: "Vitamin C Brightening Serum",
             variantId: "gid://shopify/ProductVariant/5001",
-            price: 30.00
+            price: 30.00,
+            imageUrl: "https://images.unsplash.com/photo-1620916566398-39f1143ab7be?w=200&auto=format&fit=crop&q=80"
           },
           {
             productId: "gid://shopify/Product/2",
             productName: "Charcoal Face Mask",
             variantId: "gid://shopify/ProductVariant/5002",
-            price: 30.00
+            price: 30.00,
+            imageUrl: "https://images.unsplash.com/photo-1598440947619-2c35fc9aa908?w=200&auto=format&fit=crop&q=80"
           }
         ];
       }
@@ -818,9 +829,9 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
       align-items: center;
     }
     #app {
-      width: 100%;
-      max-width: 420px;
-      margin: 20px;
+      width: 95%;
+      max-width: 1000px;
+      margin: 40px auto;
       background: white;
       border-radius: 16px;
       box-shadow: 0 8px 30px rgba(0,0,0,0.1);
@@ -922,6 +933,14 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
       grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
       gap: 12px;
       margin-bottom: 20px;
+    }
+    .product-img {
+      width: 100%;
+      height: 100px;
+      object-fit: cover;
+      border-radius: 8px;
+      margin-bottom: 8px;
+      background-color: #f7fafc;
     }
     .product-card {
       background: white;
@@ -1253,6 +1272,7 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
               },
                 e("div", null,
                   e("div", { className: "badge-select" }, isSelected ? "✓" : ""),
+                  prod.imageUrl && e("img", { className: "product-img", src: prod.imageUrl, alt: prod.productName }),
                   e("div", { className: "card-subtitle" }, prod.variantTitle && prod.variantTitle !== "Default Title" ? prod.variantTitle : "Product"),
                   e("div", { className: "card-title" }, prod.productName),
                   
