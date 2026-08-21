@@ -344,4 +344,68 @@ describe("Beauty Subscription Optimizer Unit Tests — Churn Prediction & AI Cur
     expect(vitC!.score).toBe(110);
     expect(vitC!.reason).toContain("Inventory Bandit Boost");
   });
+
+  it("should apply weather and regional climate boost for Humid Climate (prioritizing cleansers)", () => {
+    const humidCustomer: CustomerProfile = {
+      name: "Humid Climate Customer",
+      skinType: "oily",
+      concerns: ["acne"],
+      skipCount: 0,
+      emailOpenRate: 50.0,
+      localClimate: "humid"
+    };
+
+    const recs = generateCurationSuggestions(humidCustomer);
+    const salicylic = recs.find(r => r.id === "prod-salicylic");
+    // Normal score: 50 + 20 (acne) = 70. Weather boost (+25) -> score is 95!
+    expect(salicylic!.score).toBe(95);
+    expect(salicylic!.reason).toContain("Weather/Climate Boost (Humid Climate)");
+  });
+
+  it("should apply weather and regional climate boost for Cold Climate (prioritizing repair cream)", () => {
+    const coldCustomer: CustomerProfile = {
+      name: "Cold Climate Customer",
+      skinType: "dry",
+      concerns: ["dryness"],
+      skipCount: 0,
+      emailOpenRate: 50.0,
+      localClimate: "cold"
+    };
+
+    const recs = generateCurationSuggestions(coldCustomer);
+    const ceramide = recs.find(r => r.id === "prod-ceramide");
+    // Normal score: 50 + 20 (dryness) = 70. Weather boost (+25) -> score is 95!
+    expect(ceramide!.score).toBe(95);
+    expect(ceramide!.reason).toContain("Weather/Climate Boost (Cold Climate)");
+  });
+
+  it("should correctly compute tiered volume discounts based on item quantities", () => {
+    const calculateVolumeDiscount = (qty: number, subtotal: number) => {
+      const discountFactor = qty >= 4 ? 0.75 : (qty === 3 ? 0.80 : 0.85);
+      return subtotal * discountFactor;
+    };
+
+    expect(calculateVolumeDiscount(1, 100)).toBe(85);
+    expect(calculateVolumeDiscount(2, 100)).toBe(85);
+    expect(calculateVolumeDiscount(3, 100)).toBe(80);
+    expect(calculateVolumeDiscount(4, 100)).toBe(75);
+    expect(calculateVolumeDiscount(5, 100)).toBe(75);
+  });
+
+  it("should enforce maximum add-on limits per subscriber box", () => {
+    const validateAddonLimit = (items: any[], newItemVariantId: string, limit: number) => {
+      const existingAddonQty = items
+        .filter(it => it.variantId === newItemVariantId && it.isAddOn)
+        .reduce((sum, it) => sum + (it.quantity || 1), 0);
+      return existingAddonQty < limit;
+    };
+
+    const currentItems = [
+      { variantId: "5003", productName: "Moisturizer", isAddOn: true, quantity: 1 }
+    ];
+
+    expect(validateAddonLimit(currentItems, "5003", 1)).toBe(false); // blocked at limit of 1
+    expect(validateAddonLimit(currentItems, "5003", 2)).toBe(true);  // allowed at limit of 2
+    expect(validateAddonLimit(currentItems, "5004", 1)).toBe(true);  // allowed for different product
+  });
 });

@@ -529,16 +529,21 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
   app.post("/api/storefront/portal/postpone", validateStorefrontSession, async (req, res) => {
     try {
       const session = req.body.session;
-      const { contractId, days } = req.body;
+      const { contractId, days, date } = req.body;
 
-      const postponeDays = parseInt(days || "30");
       const contract = await prisma.subscriptionContract.findUnique({ where: { id: contractId } });
       if (!contract) {
         return res.status(404).json({ error: "Subscription contract not found" });
       }
 
-      const currentBill = new Date(contract.nextBillDate);
-      const updatedBill = new Date(currentBill.getTime() + postponeDays * 24 * 60 * 60 * 1000);
+      let updatedBill: Date;
+      if (date) {
+        updatedBill = new Date(date);
+      } else {
+        const postponeDays = parseInt(days || "30");
+        const currentBill = new Date(contract.nextBillDate);
+        updatedBill = new Date(currentBill.getTime() + postponeDays * 24 * 60 * 60 * 1000);
+      }
 
       const updated = await prisma.subscriptionContract.update({
         where: { id: contractId },
@@ -799,7 +804,8 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
       let themeConfig = {
         themePrimaryColor: "#b89047", // premium luxury warm gold by default
         themeSecondaryColor: "#1a365d", // premium deep navy by default
-        maxAddonLimit: 1 // default limit of 1 add-on per subscriber
+        maxAddonLimit: 1, // default limit of 1 add-on per subscriber
+        minStartDateDays: 2 // default min days to start subscription is 2
       };
 
       if (fs.existsSync(configPath)) {
@@ -823,7 +829,7 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
   // POST /api/admin/theme-settings (Update theme colors and branding settings)
   app.post("/api/admin/theme-settings", async (req, res) => {
     try {
-      const { shop, themePrimaryColor, themeSecondaryColor, maxAddonLimit } = req.body;
+      const { shop, themePrimaryColor, themeSecondaryColor, maxAddonLimit, minStartDateDays } = req.body;
       if (!shop) {
         return res.status(400).json({ error: "Missing required shop parameter" });
       }
@@ -841,11 +847,13 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
       }
 
       const existingLimit = allConfigs[shop]?.maxAddonLimit !== undefined ? allConfigs[shop].maxAddonLimit : 1;
+      const existingMinDate = allConfigs[shop]?.minStartDateDays !== undefined ? allConfigs[shop].minStartDateDays : 2;
 
       allConfigs[shop] = {
         themePrimaryColor: themePrimaryColor || allConfigs[shop]?.themePrimaryColor || "#b89047",
         themeSecondaryColor: themeSecondaryColor || allConfigs[shop]?.themeSecondaryColor || "#1a365d",
-        maxAddonLimit: maxAddonLimit !== undefined ? parseInt(maxAddonLimit) : existingLimit
+        maxAddonLimit: maxAddonLimit !== undefined ? parseInt(maxAddonLimit) : existingLimit,
+        minStartDateDays: minStartDateDays !== undefined ? parseInt(minStartDateDays) : existingMinDate
       };
 
       fs.writeFileSync(configPath, JSON.stringify(allConfigs, null, 2), "utf-8");
@@ -962,6 +970,7 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
       const configPath = path.resolve("./theme-settings.json");
       let themePrimaryColor = "#b89047"; // premium luxury gold by default
       let themeSecondaryColor = "#1a365d"; // premium deep navy by default
+      let minStartDateDays = 2; // default 2 days min from checkout
 
       if (fs.existsSync(configPath)) {
         try {
@@ -970,6 +979,9 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
           if (allConfigs[shop]) {
             themePrimaryColor = allConfigs[shop].themePrimaryColor || themePrimaryColor;
             themeSecondaryColor = allConfigs[shop].themeSecondaryColor || themeSecondaryColor;
+            if (allConfigs[shop].minStartDateDays !== undefined) {
+              minStartDateDays = parseInt(allConfigs[shop].minStartDateDays);
+            }
           }
         } catch (e) {
           console.error("Error reading theme config file:", e);
@@ -1482,16 +1494,24 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
       const [strictFilter, setStrictFilter] = React.useState(false);
       const itemsPerPage = 6;
 
+      const minStartDateDays = ${minStartDateDays};
+      const getMinDateStr = () => {
+        const d = new Date(Date.now() + minStartDateDays * 24 * 60 * 60 * 1000);
+        return d.toISOString().split("T")[0];
+      };
+
+      const [customStartDate, setCustomStartDate] = React.useState(getMinDateStr());
+      const [isRescheduling, setIsRescheduling] = React.useState(false);
+
+      // GlowBot Chat Assistant states
+      const [chatMessages, setChatMessages] = React.useState([
+        { sender: "bot", text: "Hey Glowgetter! GlowBot here. 🌟 Need help with your routine box shipment? \n\nReply with a number:\n1 - Delay 30 Days\n2 - Skip Next Shipment\n3 - Swap Serum for gentle formula\n4 - Add-on Moisturizer" }
+      ]);
+      const [chatInput, setChatInput] = React.useState("");
+
       React.useEffect(() => {
         setCurrentPage(1);
       }, [searchQuery, strictFilter]);
-
-      // Initialize default selection in builder if empty and no contract exists
-      React.useEffect(() => {
-        if (!contract && liveProducts.length > 0 && selectedVariants.length === 0) {
-          setSelectedVariants([liveProducts[0].variantId]);
-        }
-      }, [liveProducts, contract]);
 
       // Calculate dynamic quantities & prices
       const getProductQty = (vId) => selectedVariants.filter(id => id === vId).length;
@@ -1644,12 +1664,16 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
       const activateRoutine = () => {
         setActivating(true);
         const uniqueSelectedIds = [...new Set(selectedVariants)];
+        
+        // Calculate volume discount factor
+        const discountFactor = selectedVariants.length >= 4 ? 0.75 : (selectedVariants.length === 3 ? 0.80 : 0.85);
+
         const itemsToCreate = uniqueSelectedIds.map(vId => {
           const p = liveProducts.find(prod => prod.variantId === vId);
           return {
             variantId: p.variantId,
             productName: p.productName,
-            price: p.price,
+            price: p.price * discountFactor, // Save correctly discounted volume price!
             quantity: getProductQty(vId)
           };
         });
@@ -1675,6 +1699,7 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
             customerId: "${customerId}", 
             variantIds: uniqueSelectedIds, 
             frequencyDays: routineFrequency,
+            startDate: customStartDate,
             items: itemsToCreate
           })
         })
@@ -1699,12 +1724,16 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
       const saveActiveRoutineEdits = () => {
         setActivating(true);
         const uniqueSelectedIds = [...new Set(selectedVariants)];
+        
+        // Calculate volume discount factor
+        const discountFactor = selectedVariants.length >= 4 ? 0.75 : (selectedVariants.length === 3 ? 0.80 : 0.85);
+
         const itemsToSave = uniqueSelectedIds.map(vId => {
           const p = liveProducts.find(prod => prod.variantId === vId);
           return {
             variantId: p.variantId,
             productName: p ? p.productName : vId,
-            price: p ? p.price : 30.00,
+            price: (p ? p.price : 30.00) * discountFactor, // Save correctly discounted volume price!
             quantity: getProductQty(vId)
           };
         });
@@ -1746,6 +1775,38 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
           console.error("Failed to save routine edits:", err);
           setActivating(false);
         });
+      };
+
+      // GlowBot Live Chat Command Handler (processes real DB mutations)
+      const handleChatCommand = (cmd) => {
+        if (!cmd.trim() || !contract) return;
+        const newMsg = { sender: "user", text: cmd };
+        const updated = [...chatMessages, newMsg];
+        setChatMessages(updated);
+        setChatInput("");
+
+        setTimeout(() => {
+          let botText = "GlowBot didn't recognize that command. Type HELP to see options.";
+          const option = cmd.trim().toLowerCase();
+          
+          if (option === "1") {
+            botText = "GlowBot: Done! 📅 Delayed your upcoming box shipment by 30 days.";
+            skipBox(); // Skip/Delay 30 days
+          } else if (option === "2") {
+            botText = "GlowBot: Skipped! ⏭& Your upcoming box is skipped. We'll ship the next one.";
+            skipBox(); // Skip next box (30 days)
+          } else if (option === "3") {
+            botText = "GlowBot: Swapped! 🔄 We swapped your product due to skin sensitivity. Gentle formula is loaded.";
+            swapProduct();
+          } else if (option === "4") {
+            botText = "GlowBot: Added! 🛍& Barrier Restore Moisturizer added to your upcoming box. Thank you!";
+            addMoisturizer();
+          } else if (option === "help") {
+            botText = "GlowBot Options:\n1 - Delay 30 Days\n2 - Skip Next Box\n3 - Swap Serum\n4 - Add-on Moisturizer";
+          }
+          
+          setChatMessages(prev => [...prev, { sender: "bot", text: botText }]);
+        }, 600);
       };
 
       // Stay AI Scheduling actions
@@ -2004,9 +2065,43 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
             contract && e("div", null,
               e("div", { className: "section-title" }, "📅 Scheduled Shipments"),
               e("div", { className: "card" },
-                e("div", { style: { fontSize: "11px", color: "#6d7175" } }, "Next Shipment Date"),
+                e("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center" } },
+                  e("div", { style: { fontSize: "11px", color: "#6d7175" } }, "Next Shipment Date"),
+                  e("button", { 
+                    onClick: () => setIsRescheduling(!isRescheduling),
+                    className: "edit-btn",
+                    style: { fontSize: "10px" }
+                  }, isRescheduling ? "Cancel" : "✏️ Reschedule")
+                ),
                 e("div", { style: { fontSize: "16px", fontWeight: "bold", color: "#2c3e50", marginTop: "2px" } }, new Date(contract.nextBillDate).toLocaleDateString()),
-                e("div", { style: { fontSize: "11px", color: "#6d7175", marginTop: "4px" } }, "Frequency: every " + contract.frequencyDays + " days")
+                e("div", { style: { fontSize: "11px", color: "#6d7175", marginTop: "4px" } }, "Frequency: every " + contract.frequencyDays + " days"),
+                
+                // Rescheduling console
+                isRescheduling && e("div", { style: { borderTop: "1px dashed var(--primary-color)", marginTop: "10px", paddingTop: "10px" } },
+                  e("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" } },
+                    e("span", { style: { fontSize: "11px", fontWeight: "bold", color: "var(--primary-color)" } }, "Pick New Start Date"),
+                    e("button", { 
+                      onClick: () => {
+                        const standardDate = new Date(Date.now() + contract.frequencyDays * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
+                        triggerAction("/api/storefront/portal/postpone", { days: 0, date: standardDate });
+                        setIsRescheduling(false);
+                      },
+                      style: { background: "none", border: "none", color: "#718096", fontSize: "10px", fontWeight: "bold", cursor: "pointer", textDecoration: "underline" }
+                    }, "🔄 Revert to standard")
+                  ),
+                  e("div", { style: { display: "flex", gap: "8px" } },
+                    e("input", { 
+                      type: "date", 
+                      min: getMinDateStr(),
+                      value: contract.nextBillDate ? new Date(contract.nextBillDate).toISOString().split("T")[0] : getMinDateStr(),
+                      onChange: (ev) => {
+                        triggerAction("/api/storefront/portal/postpone", { days: 0, date: ev.target.value });
+                        setIsRescheduling(false);
+                      },
+                      style: { width: "100%", padding: "6px", borderRadius: "6px", border: "1px solid #cbd5e0", fontSize: "13px", outline: "none", boxSizing: "border-box" }
+                    })
+                  )
+                )
               ),
               e("div", { className: "grid" },
                 e("button", { className: "btn-secondary", onClick: skipBox }, "⏭️ Skip Box"),
@@ -2019,6 +2114,42 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
               e("div", { className: "grid" },
                 e("button", { className: "btn-secondary", onClick: () => setFrequency(45) }, "⚙️ Set 45d Delivery"),
                 e("button", { className: "btn-primary", onClick: addMoisturizer }, "🛍️ + Moisturizer Add-on")
+              )
+            ),
+
+            // GlowBot SMS Chat Assistant Widget (Fully functional DB mutator)
+            contract && e("div", { style: { marginTop: "20px" } },
+              e("div", { className: "section-title" }, "💬 GlowBot SMS Assistant"),
+              e("div", { className: "card", style: { padding: "0", display: "flex", flexDirection: "column", height: "260px", background: "white", borderRadius: "12px", border: "1px solid #cbd5e0", overflow: "hidden" } },
+                e("div", { style: { flex: 1, padding: "12px", overflowY: "auto", display: "flex", flexDirection: "column", gap: "10px", fontSize: "12px" } },
+                  chatMessages.map((msg, idx) => e("div", { 
+                    key: idx, 
+                    style: {
+                      alignSelf: msg.sender === "user" ? "flex-end" : "flex-start",
+                      background: msg.sender === "user" ? "var(--primary-color)" : "#f1f3f5",
+                      color: msg.sender === "user" ? "white" : "#2d3748",
+                      padding: "8px 12px",
+                      borderRadius: "12px",
+                      maxWidth: "80%",
+                      whiteSpace: "pre-line",
+                      lineHeight: "1.4"
+                    }
+                  }, msg.text))
+                ),
+                e("div", { style: { borderTop: "1px solid #cbd5e0", padding: "8px", display: "flex", gap: "6px" } },
+                  e("input", { 
+                    type: "text", 
+                    value: chatInput, 
+                    placeholder: "Reply 1, 2, 3 or 4...", 
+                    onChange: (ev) => setChatInput(ev.target.value),
+                    onKeyDown: (ev) => { if (ev.key === "Enter") { handleChatCommand(chatInput); } },
+                    style: { flex: 1, padding: "8px", borderRadius: "6px", border: "1px solid #cbd5e0", fontSize: "12px", outline: "none", boxSizing: "border-box" } 
+                  }),
+                  e("button", { 
+                    onClick: () => handleChatCommand(chatInput),
+                    style: { padding: "8px 12px", backgroundColor: "var(--primary-color)", color: "white", border: "none", borderRadius: "6px", fontSize: "12px", fontWeight: "bold", cursor: "pointer" } 
+                  }, "Send")
+                )
               )
             )
           ),
@@ -2170,29 +2301,78 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
               }, "Next ▶")
             ),
 
-            // Select Delivery Interval (if no contract exists yet)
-            !contract && e("div", { style: { marginBottom: "20px" } },
-              e("label", { style: { display: "block", fontSize: "12px", fontWeight: "700", color: "#4a5568", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "8px" } }, "Delivery Interval"),
-              e("select", { 
-                value: routineFrequency, 
-                onChange: (ev) => setRoutineFrequency(parseInt(ev.target.value)),
-                style: { width: "100%", padding: "12px", borderRadius: "10px", border: "1px solid #cbd5e0", fontSize: "14px", background: "white", outline: "none", cursor: "pointer" }
-              },
-                e("option", { value: 15 }, "Deliver Every 15 Days"),
-                e("option", { value: 30 }, "Deliver Every 30 Days (Best Value)"),
-                e("option", { value: 45 }, "Deliver Every 45 Days")
+            // Select Delivery Interval & Start Date (if no contract exists yet)
+            !contract && e("div", { style: { display: "flex", gap: "12px", marginBottom: "20px", flexWrap: "wrap" } },
+              e("div", { style: { flex: 1, minWidth: "160px" } },
+                e("label", { style: { display: "block", fontSize: "12px", fontWeight: "700", color: "#4a5568", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "8px" } }, "Delivery Interval"),
+                e("select", { 
+                  value: routineFrequency, 
+                  onChange: (ev) => setRoutineFrequency(parseInt(ev.target.value)),
+                  style: { width: "100%", padding: "12px", borderRadius: "10px", border: "1px solid #cbd5e0", fontSize: "14px", background: "white", outline: "none", cursor: "pointer" }
+                },
+                  e("option", { value: 15 }, "Deliver Every 15 Days"),
+                  e("option", { value: 30 }, "Deliver Every 30 Days (Best Value)"),
+                  e("option", { value: 45 }, "Deliver Every 45 Days")
+                )
+              ),
+              e("div", { style: { flex: 1, minWidth: "160px" } },
+                e("label", { style: { display: "block", fontSize: "12px", fontWeight: "700", color: "#4a5568", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "8px" } }, "Start Date"),
+                e("input", { 
+                  type: "date", 
+                  min: getMinDateStr(),
+                  value: customStartDate,
+                  onChange: (ev) => setCustomStartDate(ev.target.value),
+                  style: { width: "100%", padding: "12px", borderRadius: "10px", border: "1px solid #cbd5e0", fontSize: "14px", background: "white", outline: "none", cursor: "pointer", boxSizing: "border-box" }
+                })
               )
             ),
 
-            // Dynamic Sticky Footer (For builder checkout or editing bundle)
+            // Dynamic Sticky Footer (Supports Kaching-style Tiered Volume Discounts)
             e("div", { className: "sticky-footer" },
-              e("div", { className: "summary-row" },
-                e("span", { className: "summary-text" }, 
-                  selectedVariants.length === 0 ? "Choose your items" : 
-                  (selectedVariants.length === 1 ? "1 Item Selected" : selectedVariants.length + " Items Selected")
-                ),
-                e("span", { className: "summary-total" }, "$" + totalPrice.toFixed(2))
-              ),
+              React.useMemo(() => {
+                const subtotalPrice = selectedVariants.reduce((sum, vId) => {
+                  const prod = liveProducts.find(p => p.variantId === vId);
+                  return sum + (prod ? prod.price : 0);
+                }, 0);
+
+                const currentQty = selectedVariants.length;
+                let discPercent = 0;
+                let discountedTotal = 0;
+                let tierMsg = "Add skincare products above to unlock VIP savings!";
+
+                if (currentQty === 1) {
+                  discPercent = 15;
+                  discountedTotal = subtotalPrice * 0.85;
+                  tierMsg = "✨ Add 2 more items to unlock 20% Off + Free Gift!";
+                } else if (currentQty === 2) {
+                  discPercent = 15;
+                  discountedTotal = subtotalPrice * 0.85;
+                  tierMsg = "🎉 15% Off unlocked! Add 1 more to unlock 20% Off + Free Gift!";
+                } else if (currentQty === 3) {
+                  discPercent = 20;
+                  discountedTotal = subtotalPrice * 0.80;
+                  tierMsg = "🔥 20% Off + Free Gift unlocked! Add 1 more to unlock 25% VIP Off!";
+                } else if (currentQty >= 4) {
+                  discPercent = 25;
+                  discountedTotal = subtotalPrice * 0.75;
+                  tierMsg = "👑 25% VIP Off + Free Gift fully unlocked! Maximum savings applied.";
+                }
+
+                return e("div", null,
+                  e("div", { style: { fontSize: "11px", fontWeight: "700", color: "#4a5568", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "8px", textAlign: "center", fontStyle: "italic" } }, tierMsg),
+                  e("div", { className: "summary-row", style: { borderTop: "1px solid #e2e8f0", paddingTop: "8px" } },
+                    e("span", { className: "summary-text" }, 
+                      currentQty === 0 ? "Choose your items" : 
+                      (currentQty === 1 ? "1 Item Selected" : currentQty + " Items Selected")
+                    ),
+                    e("div", { style: { textAlign: "right" } },
+                      subtotalPrice > discountedTotal && e("span", { style: { fontSize: "13px", textDecoration: "line-through", color: "#a0aec0", marginRight: "8px", fontWeight: "600" } }, "$" + subtotalPrice.toFixed(2)),
+                      e("span", { className: "summary-total" }, "$" + discountedTotal.toFixed(2)),
+                      discPercent > 0 && e("div", { style: { fontSize: "10px", fontWeight: "bold", color: "#008060" } }, discPercent + "% Volume Savings Applied")
+                    )
+                  )
+                );
+              }, [selectedVariants, liveProducts]),
               
               contract ? (
                 e("button", { 
@@ -2245,14 +2425,14 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
     try {
       const session = res.locals.shopify.session;
       const shop = session.shop;
-      const { customerId, variantId, productName, price, frequencyDays, items } = req.body;
+      const { customerId, variantId, productName, price, frequencyDays, items, startDate } = req.body;
 
       if (!customerId) {
         return res.status(400).json({ error: "Missing required contract activation properties" });
       }
 
       const frequency = parseInt(frequencyDays || "30");
-      const nextBill = new Date(Date.now() + frequency * 24 * 60 * 60 * 1000);
+      const nextBill = startDate ? new Date(startDate) : new Date(Date.now() + frequency * 24 * 60 * 60 * 1000);
       const contractId = `gid://shopify/SubscriptionContract/live_${crypto.randomUUID().substring(0, 8)}`;
 
       const itemsList = items || [{
@@ -3492,12 +3672,13 @@ app.get("/", (req, res) => {
       const [adminThemePrimary, setAdminThemePrimary] = React.useState("#b89047");
       const [adminThemeSecondary, setAdminThemeSecondary] = React.useState("#1a365d");
       const [adminMaxAddonLimit, setAdminMaxAddonLimit] = React.useState("1");
+      const [adminMinStartDateDays, setAdminMinStartDateDays] = React.useState("2");
+      const [adminStartDate, setAdminStartDate] = React.useState("");
 
       React.useEffect(() => {
-        if (inventory.length > 0 && adminSelectedVariants.length === 0) {
-          setAdminSelectedVariants([inventory[0].productId]);
-        }
-      }, [inventory]);
+        const d = new Date(Date.now() + parseInt(adminMinStartDateDays || "2") * 24 * 60 * 60 * 1000);
+        setAdminStartDate(d.toISOString().split("T")[0]);
+      }, [adminMinStartDateDays]);
 
       const [smsMessages, setSmsMessages] = React.useState([
         { sender: "bot", text: "Welcome to GlowBot Support! Please select a customer profile in the console to load your personalized SMS assistant." }
@@ -3857,11 +4038,12 @@ app.get("/", (req, res) => {
             if (data.themePrimaryColor) setAdminThemePrimary(data.themePrimaryColor);
             if (data.themeSecondaryColor) setAdminThemeSecondary(data.themeSecondaryColor);
             if (data.maxAddonLimit !== undefined) setAdminMaxAddonLimit(data.maxAddonLimit.toString());
+            if (data.minStartDateDays !== undefined) setAdminMinStartDateDays(data.minStartDateDays.toString());
           })
           .catch(() => {});
       };
 
-      const handleSaveThemeSettings = (primary, secondary, limit) => {
+      const handleSaveThemeSettings = (primary, secondary, limit, minDays) => {
         fetch("/api/admin/theme-settings", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -3869,18 +4051,24 @@ app.get("/", (req, res) => {
             shop: "beauty-e2e-shop.myshopify.com",
             themePrimaryColor: primary,
             themeSecondaryColor: secondary,
-            maxAddonLimit: parseInt(limit || "1")
+            maxAddonLimit: parseInt(limit || "1"),
+            minStartDateDays: parseInt(minDays || "2")
           })
         })
         .then(res => res.json())
         .then(data => {
           if (data.success) {
-            setNotification("🎨 Curation branding & add-on limits saved successfully!");
+            setNotification("🎨 Curation branding & custom constraints saved successfully!");
             setTimeout(() => setNotification(null), 3000);
             setAdminThemePrimary(primary);
             setAdminThemeSecondary(secondary);
-            if (data.themeConfig && data.themeConfig.maxAddonLimit !== undefined) {
-              setAdminMaxAddonLimit(data.themeConfig.maxAddonLimit.toString());
+            if (data.themeConfig) {
+              if (data.themeConfig.maxAddonLimit !== undefined) {
+                setAdminMaxAddonLimit(data.themeConfig.maxAddonLimit.toString());
+              }
+              if (data.themeConfig.minStartDateDays !== undefined) {
+                setAdminMinStartDateDays(data.themeConfig.minStartDateDays.toString());
+              }
             }
           }
         })
@@ -4744,6 +4932,7 @@ app.get("/", (req, res) => {
             body: JSON.stringify({
               customerId: selectedPortalCustomerId,
               frequencyDays: adminFrequency,
+              startDate: adminStartDate,
               items: itemsToCreate
             })
           })
@@ -4859,8 +5048,8 @@ app.get("/", (req, res) => {
                 )
               ),
 
-              e("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: "16px", backgroundColor: "#f6f6f7", padding: "12px 16px", borderRadius: "8px", border: "1px solid #cbd5e0", marginBottom: "16px" } },
-                e("div", { style: { flex: 1 } },
+              e("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: "16px", backgroundColor: "#f6f6f7", padding: "12px 16px", borderRadius: "8px", border: "1px solid #cbd5e0", marginBottom: "16px", flexWrap: "wrap" } },
+                e("div", { style: { flex: 1, minWidth: "140px" } },
                   e("label", { style: { display: "block", fontSize: "10px", fontWeight: "bold", color: "#6d7175", textTransform: "uppercase", marginBottom: "4px" } }, "Billing Cycle Interval"),
                   e("select", { 
                     value: adminFrequency, 
@@ -4871,6 +5060,19 @@ app.get("/", (req, res) => {
                     e("option", { value: 30 }, "Deliver Every 30 Days (Standard)"),
                     e("option", { value: 45 }, "Deliver Every 45 Days")
                   )
+                ),
+                e("div", { style: { flex: 1, minWidth: "140px" } },
+                  e("label", { style: { display: "block", fontSize: "10px", fontWeight: "bold", color: "#6d7175", textTransform: "uppercase", marginBottom: "4px" } }, "Routine Start Date"),
+                  e("input", { 
+                    type: "date",
+                    min: (() => {
+                      const d = new Date(Date.now() + parseInt(adminMinStartDateDays || "2") * 24 * 60 * 60 * 1000);
+                      return d.toISOString().split("T")[0];
+                    })(),
+                    value: adminStartDate,
+                    onChange: (ev) => setAdminStartDate(ev.target.value),
+                    style: { width: "100%", padding: "8px", borderRadius: "6px", border: "1px solid #cbd5e0", fontSize: "13px", outline: "none", background: "white", boxSizing: "border-box" }
+                  })
                 ),
                 e("div", { style: { textAlign: "right" } },
                   e("div", { style: { fontSize: "10px", fontWeight: "bold", color: "#6d7175", textTransform: "uppercase", marginBottom: "4px" } }, "Contract Total Price"),
@@ -5002,9 +5204,19 @@ app.get("/", (req, res) => {
                   onChange: (ev) => setAdminMaxAddonLimit(ev.target.value), 
                   style: { width: "100%", padding: "10px", borderRadius: "6px", border: "1px solid #cbd5e0", fontSize: "13px", outline: "none", boxSizing: "border-box" } 
                 })
+              ),
+              e("div", { style: { minWidth: "180px" } },
+                e("label", { style: { display: "block", fontSize: "12px", fontWeight: "bold", color: "#4a5568", marginBottom: "6px" } }, "Min Days to Start Shipment"),
+                e("input", { 
+                  type: "number", 
+                  min: "0", 
+                  value: adminMinStartDateDays, 
+                  onChange: (ev) => setAdminMinStartDateDays(ev.target.value), 
+                  style: { width: "100%", padding: "10px", borderRadius: "6px", border: "1px solid #cbd5e0", fontSize: "13px", outline: "none", boxSizing: "border-box" } 
+                })
               )
             ),
-            e("button", { className: "button-primary", onClick: () => handleSaveThemeSettings(adminThemePrimary, adminThemeSecondary, adminMaxAddonLimit) }, "💾 Save Custom Portal Settings")
+            e("button", { className: "button-primary", onClick: () => handleSaveThemeSettings(adminThemePrimary, adminThemeSecondary, adminMaxAddonLimit, adminMinStartDateDays) }, "💾 Save Custom Portal Settings")
           )
         );
       };
