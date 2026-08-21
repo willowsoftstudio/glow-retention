@@ -931,7 +931,7 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
       const [profile, setProfile] = React.useState(${JSON.stringify(profile)});
       const [notification, setNotification] = React.useState(null);
       const [selectedVariants, setSelectedVariants] = React.useState([]);
-      const [frequency, setFrequency] = React.useState(30);
+      const [routineFrequency, setRoutineFrequency] = React.useState(30);
       const [activating, setActivating] = React.useState(false);
 
       const liveProducts = ${JSON.stringify(shopifyProducts)};
@@ -993,8 +993,8 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
           e("div", { style: { marginBottom: "20px" } },
             e("label", { style: { display: "block", fontSize: "13px", fontWeight: "600", color: "#4a5568", marginBottom: "6px" } }, "Delivery Frequency"),
             e("select", { 
-              value: frequency, 
-              onChange: (ev) => setFrequency(parseInt(ev.target.value)),
+              value: routineFrequency, 
+              onChange: (ev) => setRoutineFrequency(parseInt(ev.target.value)),
               style: { width: "100%", padding: "10px", borderRadius: "8px", border: "1px solid #cbd5e0", fontSize: "14px" }
             },
               e("option", { value: 15 }, "Every 15 Days"),
@@ -1024,7 +1024,7 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
                 body: JSON.stringify({ 
                   customerId: "${customerId}", 
                   variantIds: selectedVariants, 
-                  frequencyDays: frequency,
+                  frequencyDays: routineFrequency,
                   items: itemsToCreate
                 })
               })
