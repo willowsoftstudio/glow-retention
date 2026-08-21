@@ -852,7 +852,8 @@ app.post("/api/admin/customer-profiles", async (req, res) => {
       hairType,
       localClimate,
       zipCode,
-      allergens
+      allergens,
+      subscriptionTier
     } = req.body;
 
     let resolvedCustomerId = customerId;
@@ -958,7 +959,13 @@ app.post("/api/admin/customer-profiles", async (req, res) => {
         hairType,
         localClimate,
         zipCode,
-        allergens
+        allergens,
+        subscription: {
+          upsert: {
+            create: { status: "ACTIVE", tier: subscriptionTier || "STARTER" },
+            update: { tier: subscriptionTier || "STARTER" }
+          }
+        }
       },
       create: {
         customerId: resolvedCustomerId,
@@ -974,8 +981,12 @@ app.post("/api/admin/customer-profiles", async (req, res) => {
         hairType,
         localClimate,
         zipCode,
-        allergens
-      }
+        allergens,
+        subscription: {
+          create: { status: "ACTIVE", tier: subscriptionTier || "STARTER" }
+        }
+      },
+      include: { subscription: true }
     });
 
     res.json(profile);
@@ -1938,6 +1949,7 @@ app.get("/", (req, res) => {
       const [quizClimate, setQuizClimate] = React.useState("temperate");
       const [quizZipCode, setQuizZipCode] = React.useState("");
       const [quizAllergens, setQuizAllergens] = React.useState([]);
+      const [quizTier, setQuizTier] = React.useState("STARTER");
 
       const [selectedQuizCustomerId, setSelectedQuizCustomerId] = React.useState("gid://shopify/Customer/1001");
       const [manualQuizName, setManualQuizName] = React.useState("New Subscriber");
@@ -1985,6 +1997,7 @@ app.get("/", (req, res) => {
           setQuizClimate(selectedProfile.localClimate || "temperate");
           setQuizZipCode(selectedProfile.zipCode || "");
           setQuizAllergens(selectedProfile.allergens || []);
+          setQuizTier(selectedProfile.subscription?.tier || "STARTER");
         } else {
           setQuizSkinType("dry");
           setQuizConcerns([]);
@@ -1996,6 +2009,7 @@ app.get("/", (req, res) => {
           setQuizClimate("temperate");
           setQuizZipCode("");
           setQuizAllergens([]);
+          setQuizTier("STARTER");
         }
       }, [selectedQuizCustomerId, profiles]);
 
@@ -2093,12 +2107,13 @@ app.get("/", (req, res) => {
       };
 
       const handleSaveQuizProfile = () => {
+        const targetGid = selectedQuizCustomerId === "new" ? manualQuizGid : selectedQuizCustomerId;
         fetch("/api/admin/customer-profiles", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             id: selectedQuizCustomerId === "new" ? undefined : (profiles.find(p => p.customerId === selectedQuizCustomerId)?.id),
-            customerId: selectedQuizCustomerId === "new" ? manualQuizGid : selectedQuizCustomerId,
+            customerId: targetGid,
             name: selectedQuizCustomerId === "new" ? manualQuizName : (profiles.find(p => p.customerId === selectedQuizCustomerId)?.name || shopifyCustomers.find(c => c.id === selectedQuizCustomerId)?.name),
             email: selectedQuizCustomerId === "new" ? manualQuizEmail : (profiles.find(p => p.customerId === selectedQuizCustomerId)?.email || shopifyCustomers.find(c => c.id === selectedQuizCustomerId)?.email),
             skinType: quizSkinType,
@@ -2110,7 +2125,8 @@ app.get("/", (req, res) => {
             hairType: quizHair,
             localClimate: quizClimate,
             zipCode: quizZipCode,
-            allergens: quizAllergens
+            allergens: quizAllergens,
+            subscriptionTier: quizTier
           })
         })
         .then(res => {
@@ -2121,6 +2137,9 @@ app.get("/", (req, res) => {
         })
         .then(profile => {
           setNotification("Preference quiz profile saved successfully to database!");
+          if (selectedQuizCustomerId === "new") {
+            setSelectedQuizCustomerId(profile.customerId);
+          }
           refreshAllData();
         })
         .catch(err => {
@@ -2667,6 +2686,14 @@ app.get("/", (req, res) => {
               e("div", { style: { marginBottom: "10px" } },
                 e("label", { style: { display: "block", fontWeight: "600", fontSize: "12px", marginBottom: "4px" } }, "Customer Email"),
                 e("input", { type: "text", value: manualQuizEmail, onChange: (e) => setManualQuizEmail(e.target.value), style: { width: "100%", padding: "6px", borderRadius: "4px", border: "1px solid #8c9196", fontSize: "13px" } })
+              )
+            ),
+            e("div", { style: { marginBottom: "16px" } },
+              e("label", { style: { display: "block", fontWeight: "bold", marginBottom: "6px" } }, "Subscription Box Tier"),
+              e("select", { value: quizTier, onChange: (e) => setQuizTier(e.target.value), style: { width: "100%", padding: "8px", borderRadius: "4px", border: "1px solid #8c9196" } },
+                e("option", { value: "STARTER" }, "STARTER — Cleanser & Moisturizer Box"),
+                e("option", { value: "PRO" }, "PRO — Advanced Serum Box"),
+                e("option", { value: "ENTERPRISE" }, "ENTERPRISE — Custom Medical Box")
               )
             ),
             e("div", { style: { marginBottom: "16px" } },
