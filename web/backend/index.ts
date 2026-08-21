@@ -917,6 +917,112 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
       font-size: 13px;
       text-align: center;
     }
+    .product-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      gap: 12px;
+      margin-bottom: 20px;
+    }
+    .product-card {
+      background: white;
+      border: 1px solid #cbd5e0;
+      border-radius: 12px;
+      padding: 12px;
+      position: relative;
+      cursor: pointer;
+      transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+      box-shadow: 0 2px 4px rgba(0,0,0,0.02);
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      min-height: 120px;
+    }
+    .product-card:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+      border-color: #a0aec0;
+    }
+    .product-card.selected {
+      border: 2px solid #2b6cb0;
+      background-color: #f0f4ff;
+      box-shadow: 0 4px 12px rgba(43, 108, 176, 0.1);
+    }
+    .product-card .price-tag {
+      font-weight: 700;
+      color: #2b6cb0;
+      margin-top: 8px;
+      font-size: 14px;
+    }
+    .product-card .card-title {
+      font-weight: 600;
+      font-size: 13px;
+      color: #2d3748;
+      line-height: 1.3;
+      margin-bottom: 4px;
+    }
+    .product-card .card-subtitle {
+      font-size: 10px;
+      color: #718096;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .product-card .badge-select {
+      position: absolute;
+      top: 8px;
+      right: 8px;
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      border: 1px solid #cbd5e0;
+      background: white;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 10px;
+      transition: all 0.2s;
+    }
+    .product-card.selected .badge-select {
+      background: #2b6cb0;
+      border-color: #2b6cb0;
+      color: white;
+    }
+    .sticky-footer {
+      background: #f8fafc;
+      border-top: 1px solid #e2e8f0;
+      padding: 16px 20px;
+      margin: 20px -24px -24px -24px;
+      border-bottom-left-radius: 16px;
+      border-bottom-right-radius: 16px;
+    }
+    .progress-bar-container {
+      background: #e2e8f0;
+      border-radius: 6px;
+      height: 6px;
+      width: 100%;
+      margin-bottom: 12px;
+      overflow: hidden;
+    }
+    .progress-bar-fill {
+      background: #2b6cb0;
+      height: 100%;
+      transition: width 0.4s ease;
+    }
+    .summary-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+    .summary-text {
+      font-size: 12px;
+      font-weight: 600;
+      color: #4a5568;
+    }
+    .summary-total {
+      font-size: 18px;
+      font-weight: 800;
+      color: #2c3e50;
+    }
   </style>
   <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
@@ -944,16 +1050,24 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
       }, [liveProducts]);
 
       if (!contract) {
-        return e("div", { style: { padding: "10px" } },
-          e("div", { className: "header", style: { borderBottom: "none", marginBottom: "12px" } },
+        // Calculate live, dynamic bundle totals and progress
+        const totalPrice = liveProducts
+          .filter(p => selectedVariants.includes(p.variantId))
+          .reduce((acc, p) => acc + p.price, 0);
+
+        const progressPercent = Math.min(100, Math.round((selectedVariants.length / Math.max(1, liveProducts.length)) * 100));
+
+        return e("div", null,
+          e("div", { className: "header", style: { borderBottom: "none", marginBottom: "20px" } },
             e("h2", null, "✨ Design Your Skincare Routine"),
-            e("p", null, "Select from our live catalog to activate your custom monthly delivery and unlock the Glow Portal!")
+            e("p", null, "Build your custom daily box from our live catalog to unlock recurring discounts and the Glow Portal!")
           ),
-          e("div", { style: { display: "flex", flexDirection: "column", gap: "12px", marginBottom: "20px" } },
+          
+          e("div", { className: "product-grid" },
             liveProducts.map((prod) => {
-              const isChecked = selectedVariants.includes(prod.variantId);
+              const isSelected = selectedVariants.includes(prod.variantId);
               const toggleProduct = () => {
-                if (isChecked) {
+                if (isSelected) {
                   setSelectedVariants(selectedVariants.filter(id => id !== prod.variantId));
                 } else {
                   setSelectedVariants([...selectedVariants, prod.variantId]);
@@ -962,89 +1076,87 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
               return e("div", { 
                 key: prod.variantId, 
                 onClick: toggleProduct,
-                style: {
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  padding: "12px",
-                  borderRadius: "8px",
-                  border: isChecked ? "2px solid #2b6cb0" : "1px solid #cbd5e0",
-                  backgroundColor: isChecked ? "#f0f4ff" : "#fff",
-                  cursor: "pointer",
-                  transition: "all 0.2s"
-                }
+                className: "product-card " + (isSelected ? "selected" : "")
               },
-                e("div", { style: { display: "flex", alignItems: "center", gap: "10px" } },
-                  e("input", { 
-                    type: "checkbox", 
-                    checked: isChecked, 
-                    onChange: toggleProduct,
-                    style: { cursor: "pointer" }
-                  }),
-                  e("div", null,
-                    e("div", { style: { fontWeight: "600", fontSize: "14px", color: "#2d3748" } }, prod.productName),
-                    prod.variantTitle && prod.variantTitle !== "Default Title" && e("div", { style: { fontSize: "11px", color: "#718096" } }, prod.variantTitle)
-                  )
+                e("div", null,
+                  e("div", { className: "badge-select" }, isSelected ? "✓" : ""),
+                  e("div", { className: "card-subtitle" }, prod.variantTitle && prod.variantTitle !== "Default Title" ? prod.variantTitle : "Product"),
+                  e("div", { className: "card-title" }, prod.productName)
                 ),
-                e("div", { style: { fontWeight: "bold", fontSize: "14px", color: "#2b6cb0" } }, "$" + prod.price.toFixed(2))
+                e("div", { className: "price-tag" }, "$" + prod.price.toFixed(2))
               );
             })
           ),
+
           e("div", { style: { marginBottom: "20px" } },
-            e("label", { style: { display: "block", fontSize: "13px", fontWeight: "600", color: "#4a5568", marginBottom: "6px" } }, "Delivery Frequency"),
+            e("label", { style: { display: "block", fontSize: "12px", fontWeight: "700", color: "#4a5568", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "8px" } }, "Delivery Interval"),
             e("select", { 
               value: routineFrequency, 
               onChange: (ev) => setRoutineFrequency(parseInt(ev.target.value)),
-              style: { width: "100%", padding: "10px", borderRadius: "8px", border: "1px solid #cbd5e0", fontSize: "14px" }
+              style: { width: "100%", padding: "12px", borderRadius: "10px", border: "1px solid #cbd5e0", fontSize: "14px", background: "white", outline: "none", cursor: "pointer" }
             },
-              e("option", { value: 15 }, "Every 15 Days"),
-              e("option", { value: 30 }, "Every 30 Days (Recommended)"),
-              e("option", { value: 45 }, "Every 45 Days")
+              e("option", { value: 15 }, "Deliver Every 15 Days"),
+              e("option", { value: 30 }, "Deliver Every 30 Days (Best Value)"),
+              e("option", { value: 45 }, "Deliver Every 45 Days")
             )
           ),
-          e("button", { 
-            className: "btn-primary", 
-            disabled: selectedVariants.length === 0 || activating, 
-            onClick: () => {
-              setActivating(true);
-              const itemsToCreate = liveProducts
-                .filter(p => selectedVariants.includes(p.variantId))
-                .map(p => ({
-                  variantId: p.variantId,
-                  productName: p.productName,
-                  price: p.price
-                }));
-              fetch("/api/storefront/routine/create", {
-                method: "POST",
-                headers: { 
-                  "Content-Type": "application/json",
-                  "x-shop-domain": "${shop}",
-                  "x-test-session-id": "beauty-portal-session"
-                },
-                body: JSON.stringify({ 
-                  customerId: "${customerId}", 
-                  variantIds: selectedVariants, 
-                  frequencyDays: routineFrequency,
-                  items: itemsToCreate
+
+          // Dynamic Sticky Value Footer
+          e("div", { className: "sticky-footer" },
+            e("div", { className: "progress-bar-container" },
+              e("div", { className: "progress-bar-fill", style: { width: progressPercent + "%" } })
+            ),
+            e("div", { className: "summary-row" },
+              e("span", { className: "summary-text" }, 
+                selectedVariants.length === 0 ? "Choose your items" : 
+                (selectedVariants.length === 1 ? "1 Item Selected" : selectedVariants.length + " Items Selected")
+              ),
+              e("span", { className: "summary-total" }, "$" + totalPrice.toFixed(2))
+            ),
+            e("button", { 
+              className: "btn-primary", 
+              disabled: selectedVariants.length === 0 || activating, 
+              onClick: () => {
+                setActivating(true);
+                const itemsToCreate = liveProducts
+                  .filter(p => selectedVariants.includes(p.variantId))
+                  .map(p => ({
+                    variantId: p.variantId,
+                    productName: p.productName,
+                    price: p.price
+                  }));
+                fetch("/api/storefront/routine/create", {
+                  method: "POST",
+                  headers: { 
+                    "Content-Type": "application/json",
+                    "x-shop-domain": "${shop}",
+                    "x-test-session-id": "beauty-portal-session"
+                  },
+                  body: JSON.stringify({ 
+                    customerId: "${customerId}", 
+                    variantIds: selectedVariants, 
+                    frequencyDays: routineFrequency,
+                    items: itemsToCreate
+                  })
                 })
-              })
-              .then(res => res.json())
-              .then(data => {
-                if (data.success) {
-                  setContract(data.contract);
-                  setNotification("🎉 Subscription routine successfully activated!");
-                  setTimeout(() => setNotification(null), 3000);
-                } else {
-                  alert("Failed to activate: " + (data.error || "Unknown error"));
-                }
-                setActivating(false);
-              })
-              .catch(err => {
-                console.error("Activation failed:", err);
-                setActivating(false);
-              });
-            }
-          }, activating ? "⏳ Activating..." : "🚀 Activate Skincare Routine & Enter Portal")
+                .then(res => res.json())
+                .then(data => {
+                  if (data.success) {
+                    setContract(data.contract);
+                    setNotification("🎉 Subscription routine successfully activated!");
+                    setTimeout(() => setNotification(null), 3000);
+                  } else {
+                    alert("Failed to activate: " + (data.error || "Unknown error"));
+                  }
+                  setActivating(false);
+                })
+                .catch(err => {
+                  console.error("Activation failed:", err);
+                  setActivating(false);
+                });
+              }
+            }, activating ? "⏳ Activating..." : "🚀 Activate Routine & Unlock Portal")
+          )
         );
       }
 
@@ -1173,9 +1285,9 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
     try {
       const session = res.locals.shopify.session;
       const shop = session.shop;
-      const { customerId, variantId, productName, price, frequencyDays } = req.body;
+      const { customerId, variantId, productName, price, frequencyDays, items } = req.body;
 
-      if (!customerId || !variantId || !productName) {
+      if (!customerId) {
         return res.status(400).json({ error: "Missing required contract activation properties" });
       }
 
@@ -1183,9 +1295,9 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
       const nextBill = new Date(Date.now() + frequency * 24 * 60 * 60 * 1000);
       const contractId = `gid://shopify/SubscriptionContract/live_${crypto.randomUUID().substring(0, 8)}`;
 
-      const itemsList = [{
-        variantId,
-        productName,
+      const itemsList = items || [{
+        variantId: variantId || "gid://shopify/ProductVariant/5001",
+        productName: productName || "Vitamin C Serum",
         price: parseFloat(price || "30.00")
       }];
 
@@ -2401,6 +2513,14 @@ app.get("/", (req, res) => {
 
       const [portalContract, setPortalContract] = React.useState(null);
       const [selectedPortalCustomerId, setSelectedPortalCustomerId] = React.useState("");
+      const [adminSelectedVariants, setAdminSelectedVariants] = React.useState([]);
+      const [adminFrequency, setAdminFrequency] = React.useState(30);
+
+      React.useEffect(() => {
+        if (inventory.length > 0 && adminSelectedVariants.length === 0) {
+          setAdminSelectedVariants([inventory[0].productId]);
+        }
+      }, [inventory]);
 
       const [smsMessages, setSmsMessages] = React.useState([
         { sender: "bot", text: "Welcome to GlowBot Support! Please select a customer profile in the console to load your personalized SMS assistant." }
