@@ -37,6 +37,7 @@ export interface CustomerProfile {
   failedPaymentCount?: number;
   tenureMonths?: number;
   zipCode?: string;
+  localClimate?: string;
   allergens?: string[];
   deliveredProductIds?: string[];
 }
@@ -126,11 +127,22 @@ export function generateCurationSuggestions(
       reason = "General skin type compatibility match";
     }
 
-    // 2. Weather & Zip Climate Adaptation: Zip 90XXX (Southern California) is sunny/dry
-    if (profile.zipCode && profile.zipCode.startsWith("90")) {
+    // 2. Weather & Seasonal Climate Adaptation (Dry, Humid, Temperate, Cold)
+    const climate = profile.localClimate || "temperate";
+    if (climate === "dry") {
       if (product.id === "prod-vit-c" || product.id === "prod-ceramide") {
         score += 25;
-        reason += " | Weather/Climate Boost (Zip starts with 90)";
+        reason += " | Weather/Climate Boost (Dry Climate)";
+      }
+    } else if (climate === "humid") {
+      if (product.id === "prod-salicylic") {
+        score += 25;
+        reason += " | Weather/Climate Boost (Humid Climate)";
+      }
+    } else if (climate === "cold") {
+      if (product.id === "prod-ceramide") {
+        score += 25;
+        reason += " | Weather/Climate Boost (Cold Climate)";
       }
     }
 
@@ -296,21 +308,21 @@ describe("Beauty Subscription Optimizer Unit Tests — Churn Prediction & AI Cur
     expect(vitC!.reason).toContain("Saturation Penalty applied");
   });
 
-  it("should apply weather and regional climate boost for Zip 90XXX (Southern California)", () => {
-    const sunnyDryCustomer: CustomerProfile = {
-      name: "LA Sunshine Customer",
+  it("should apply weather and regional climate boost for Dry Climate", () => {
+    const dryClimateCustomer: CustomerProfile = {
+      name: "Dry Climate Customer",
       skinType: "dry",
       concerns: ["aging"],
       skipCount: 0,
       emailOpenRate: 50.0,
-      zipCode: "90210" // LA, Southern California
+      localClimate: "dry"
     };
 
-    const recs = generateCurationSuggestions(sunnyDryCustomer);
+    const recs = generateCurationSuggestions(dryClimateCustomer);
     const vitC = recs.find(r => r.id === "prod-vit-c");
     // Normal score: 50 + 20 (aging) + 10 (margin) = 80. Weather boost (+25) -> score is 105!
     expect(vitC!.score).toBe(105);
-    expect(vitC!.reason).toContain("Weather/Climate Boost");
+    expect(vitC!.reason).toContain("Weather/Climate Boost (Dry Climate)");
   });
 
   it("should aggressively push overstocked items using inventory bandit boosting", () => {

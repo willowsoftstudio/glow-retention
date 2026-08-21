@@ -1465,7 +1465,15 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
       // Quiz Form Profile Edit states
       const [isEditingProfile, setIsEditingProfile] = React.useState(!profile);
       const [formSkinType, setFormSkinType] = React.useState(profile ? profile.skinType || "dry" : "dry");
-      const [formConcern, setFormConcern] = React.useState(profile ? (profile.concerns?.[0] || "aging") : "aging");
+      const [formConcerns, setFormConcerns] = React.useState(profile ? profile.concerns || ["aging"] : ["aging"]);
+      const [formFragrance, setFormFragrance] = React.useState(profile ? profile.fragrancePreference || "unscented" : "unscented");
+      const [formPrice, setFormPrice] = React.useState(profile ? profile.priceSensitivity || "medium" : "medium");
+      const [formCategories, setFormCategories] = React.useState(profile ? profile.preferredCategories || ["skincare"] : ["skincare"]);
+      const [formEthical, setFormEthical] = React.useState(profile ? profile.ethicalPreferences || ["cruelty-free"] : ["cruelty-free"]);
+      const [formHair, setFormHair] = React.useState(profile ? profile.hairType || "straight" : "straight");
+      const [formClimate, setFormClimate] = React.useState(profile ? profile.localClimate || "temperate" : "temperate");
+      const [formZip, setFormZip] = React.useState(profile ? profile.zipCode || "" : "");
+      const [formAllergens, setFormAllergens] = React.useState(profile ? (profile.allergens || []).join(", ") : "");
       const [savingProfile, setSavingProfile] = React.useState(false);
 
       // Search, Filter & Pagination states
@@ -1509,7 +1517,7 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
       // Pipeline: Search, Filter, Curation Sorting & Pagination
       const pipelineData = React.useMemo(() => {
         const currentSkin = profile ? profile.skinType : formSkinType;
-        const currentConcern = profile ? (profile.concerns?.[0] || "aging") : formConcern;
+        const currentConcern = profile ? (profile.concerns?.[0] || "aging") : (formConcerns?.[0] || "aging");
 
         // 1. Search Filter (by name case-insensitively)
         let filtered = [...liveProducts];
@@ -1518,7 +1526,7 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
           filtered = filtered.filter(p => p.productName.toLowerCase().includes(q));
         }
 
-        // 2. Strict Skin Profile Filter
+        // 2. Strict Skin Profile & Allergen Filter
         if (strictFilter) {
           filtered = filtered.filter(p => {
             const name = p.productName.toLowerCase();
@@ -1526,6 +1534,12 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
             if (currentSkin === "dry" && (name.includes("mask") || name.includes("charcoal"))) return false;
             // Oily skin strictly filters out thick oily dry-skin serums
             if ((currentSkin === "oily" || currentSkin === "combination") && (name.includes("serum") || name.includes("vitamin"))) return false;
+            
+            // Strictly filter out any products matching the user's active allergens list
+            const userAllergens = profile ? (profile.allergens || []) : formAllergens.split(",").map(s => s.trim().toLowerCase()).filter(Boolean);
+            for (const allergen of userAllergens) {
+              if (name.includes(allergen)) return false;
+            }
             return true;
           });
         }
@@ -1558,7 +1572,7 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
           totalItems: totalItemsCount,
           totalPages: totalPagesCount
         };
-      }, [profile, formSkinType, formConcern, liveProducts, searchQuery, strictFilter, currentPage]);
+      }, [profile, formSkinType, formConcerns, formAllergens, liveProducts, searchQuery, strictFilter, currentPage]);
 
       const maxSlots = 3;
       const slotsToRender = Array.from({ length: maxSlots });
@@ -1594,11 +1608,20 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
             "x-test-session-id": "beauty-portal-session"
           },
           body: JSON.stringify({ 
+            id: profile ? profile.id : undefined,
             customerId: "${customerId}", 
             name: profile?.name || "Glowgetter",
             email: profile?.email || "subscriber@example.com",
             skinType: formSkinType,
-            concerns: [formConcern]
+            concerns: formConcerns,
+            fragrancePreference: formFragrance,
+            priceSensitivity: formPrice,
+            preferredCategories: formCategories,
+            ethicalPreferences: formEthical,
+            hairType: formHair,
+            localClimate: formClimate,
+            zipCode: formZip,
+            allergens: formAllergens.split(",").map(s => s.trim().toLowerCase()).filter(Boolean)
           })
         })
         .then(res => res.json())
@@ -1606,7 +1629,7 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
           if (data.success) {
             setProfile(data.profile);
             setIsEditingProfile(false);
-            setNotification("🎉 Skincare profile preference successfully saved!");
+            setNotification("🎉 Your Beauty Profile successfully updated!");
             setTimeout(() => setNotification(null), 3000);
           }
           setSavingProfile(false);
@@ -1787,7 +1810,7 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
             e("div", { className: "section-title" }, "🧬 Personalization Engine"),
             e("div", { className: "profile-card" },
               e("div", { className: "profile-title" }, 
-                e("span", null, "Your Skin Preferences"),
+                e("span", null, "Your Beauty DNA Profile"),
                 profile && e("button", { className: "edit-btn", onClick: () => setIsEditingProfile(!isEditingProfile) }, isEditingProfile ? "Cancel" : "Edit")
               ),
               
@@ -1801,29 +1824,179 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
                     e("option", { value: "sensitive" }, "Sensitive Skin")
                   )
                 ),
+                
                 e("div", { className: "form-group" },
-                  e("label", { className: "form-label" }, "Primary Concern"),
-                  e("select", { value: formConcern, onChange: (ev) => setFormConcern(ev.target.value), className: "form-select" },
-                    e("option", { value: "aging" }, "Aging & Fine Lines"),
-                    e("option", { value: "acne" }, "Acne & Blemishes"),
-                    e("option", { value: "dullness" }, "Dullness & Brightening")
-                  )
-                ),
-                e("button", { className: "btn-primary", onClick: saveSkinProfile, disabled: savingProfile, style: { fontSize: "12px", padding: "8px" } }, savingProfile ? "Saving..." : "Save Preferences")
-              ) : e("div", null,
-                e("div", { style: { marginBottom: "10px" } },
-                  e("div", { className: "form-label" }, "Skin Profile Type"),
+                  e("label", { className: "form-label" }, "Target Concerns (Select Multi)"),
                   e("div", { className: "tag-container" },
-                    e("span", { className: "tag-badge tag-badge-accent" }, profile.skinType + " skin")
+                    ["aging", "acne", "dullness", "redness", "dryness"].map(c => {
+                      const active = formConcerns.includes(c);
+                      const toggle = () => {
+                        if (active) setFormConcerns(formConcerns.filter(id => id !== c));
+                        else setFormConcerns([...formConcerns, c]);
+                      };
+                      return e("span", { 
+                        key: c, 
+                        onClick: toggle, 
+                        className: "tag-badge " + (active ? "tag-badge-accent" : ""),
+                        style: { cursor: "pointer" }
+                      }, c);
+                    })
                   )
                 ),
-                e("div", null,
+
+                e("div", { className: "form-group" },
+                  e("label", { className: "form-label" }, "Preferred Categories"),
+                  e("div", { className: "tag-container" },
+                    ["skincare", "haircare", "makeup"].map(c => {
+                      const active = formCategories.includes(c);
+                      const toggle = () => {
+                        if (active) setFormCategories(formCategories.filter(id => id !== c));
+                        else setFormCategories([...formCategories, c]);
+                      };
+                      return e("span", { 
+                        key: c, 
+                        onClick: toggle, 
+                        className: "tag-badge " + (active ? "tag-badge-accent" : ""),
+                        style: { cursor: "pointer" }
+                      }, c);
+                    })
+                  )
+                ),
+
+                e("div", { className: "form-group" },
+                  e("label", { className: "form-label" }, "Ethical Preferences"),
+                  e("div", { className: "tag-container" },
+                    ["vegan", "cruelty-free", "organic"].map(c => {
+                      const active = formEthical.includes(c);
+                      const toggle = () => {
+                        if (active) setFormEthical(formEthical.filter(id => id !== c));
+                        else setFormEthical([...formEthical, c]);
+                      };
+                      return e("span", { 
+                        key: c, 
+                        onClick: toggle, 
+                        className: "tag-badge " + (active ? "tag-badge-accent" : ""),
+                        style: { cursor: "pointer" }
+                      }, c);
+                    })
+                  )
+                ),
+
+                e("div", { className: "form-group" },
+                  e("label", { className: "form-label" }, "Fragrance Preference"),
+                  e("select", { value: formFragrance, onChange: (ev) => setFormFragrance(ev.target.value), className: "form-select" },
+                    e("option", { value: "unscented" }, "Fragrance-Free"),
+                    e("option", { value: "floral" }, "Floral Notes"),
+                    e("option", { value: "herbal" }, "Herbal / Earthy"),
+                    e("option", { value: "fruity" }, "Sweet / Fruity")
+                  )
+                ),
+
+                e("div", { className: "form-group" },
+                  e("label", { className: "form-label" }, "Price Sensitivity"),
+                  e("select", { value: formPrice, onChange: (ev) => setFormPrice(ev.target.value), className: "form-select" },
+                    e("option", { value: "low" }, "Eco-Friendly / Low"),
+                    e("option", { value: "medium" }, "Standard Value / Mid"),
+                    e("option", { value: "high" }, "Premium Luxury / High")
+                  )
+                ),
+
+                e("div", { className: "form-group" },
+                  e("label", { className: "form-label" }, "Hair Type"),
+                  e("select", { value: formHair, onChange: (ev) => setFormHair(ev.target.value), className: "form-select" },
+                    e("option", { value: "straight" }, "Straight Hair"),
+                    e("option", { value: "wavy" }, "Wavy Hair"),
+                    e("option", { value: "curly" }, "Curly Hair"),
+                    e("option", { value: "coily" }, "Coily / Kinky")
+                  )
+                ),
+
+                e("div", { className: "form-group" },
+                  e("label", { className: "form-label" }, "Local Climate"),
+                  e("select", { value: formClimate, onChange: (ev) => setFormClimate(ev.target.value), className: "form-select" },
+                    e("option", { value: "temperate" }, "Temperate / Moderate"),
+                    e("option", { value: "dry" }, "Dry / Desert"),
+                    e("option", { value: "humid" }, "Humid / Tropical"),
+                    e("option", { value: "cold" }, "Cold / Frigid")
+                  )
+                ),
+
+                e("div", { className: "form-group" },
+                  e("label", { className: "form-label" }, "Zip / Postal Code"),
+                  e("input", { 
+                    type: "text", 
+                    value: formZip, 
+                    onChange: (ev) => setFormZip(ev.target.value), 
+                    placeholder: "e.g. 90210", 
+                    style: { width: "100%", padding: "10px", borderRadius: "8px", border: "1px solid #cbd5e0", fontSize: "13px", boxSizing: "border-box", outline: "none" } 
+                  })
+                ),
+
+                e("div", { className: "form-group", style: { marginBottom: "16px" } },
+                  e("label", { className: "form-label" }, "Allergens / Exclusions"),
+                  e("input", { 
+                    type: "text", 
+                    value: formAllergens, 
+                    onChange: (ev) => setFormAllergens(ev.target.value), 
+                    placeholder: "e.g. nuts, parabens, alcohol", 
+                    style: { width: "100%", padding: "10px", borderRadius: "8px", border: "1px solid #cbd5e0", fontSize: "13px", boxSizing: "border-box", outline: "none" } 
+                  }),
+                  e("p", { style: { margin: "4px 0 0 0", fontSize: "10px", color: "#718096" } }, "Separate ingredients with commas. Conflicting catalog recommendations are strictly auto-muted.")
+                ),
+
+                e("button", { className: "btn-primary", onClick: saveSkinProfile, disabled: savingProfile, style: { fontSize: "13px", padding: "10px" } }, savingProfile ? "Saving Skincare DNA..." : "Save Skincare & Beauty DNA")
+              ) : e("div", null,
+                e("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px", marginBottom: "12px" } },
+                  e("div", null,
+                    e("div", { className: "form-label" }, "Skin Type"),
+                    e("span", { className: "tag-badge tag-badge-accent" }, profile.skinType + " skin")
+                  ),
+                  e("div", null,
+                    e("div", { className: "form-label" }, "Fragrance"),
+                    e("span", { className: "tag-badge" }, profile.fragrancePreference || "unscented")
+                  )
+                ),
+                
+                e("div", { style: { marginBottom: "12px" } },
                   e("div", { className: "form-label" }, "Addressed Concerns"),
                   e("div", { className: "tag-container" },
-                    (profile.concerns || []).map((c, i) => e("span", { key: i, className: "tag-badge" }, c))
+                    (profile.concerns || []).map((c, i) => e("span", { key: i, className: "tag-badge tag-badge-accent" }, c))
                   )
                 ),
-                e("p", { style: { fontSize: "11px", color: "#718096", marginTop: "12px", fontStyle: "italic" } }, "💡 Your product catalog and recommendations dynamically customize as your preferences update!")
+
+                e("div", { style: { marginBottom: "12px" } },
+                  e("div", { className: "form-label" }, "Beauty Category Limits"),
+                  e("div", { className: "tag-container" },
+                    (profile.preferredCategories || []).map((c, i) => e("span", { key: i, className: "tag-badge" }, c))
+                  )
+                ),
+
+                e("div", { style: { marginBottom: "12px" } },
+                  e("div", { className: "form-label" }, "Ethical Choices"),
+                  e("div", { className: "tag-container" },
+                    (profile.ethicalPreferences || []).map((c, i) => e("span", { key: i, className: "tag-badge tag-badge-accent" }, c))
+                  )
+                ),
+
+                e("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px", marginBottom: "12px" } },
+                  e("div", null,
+                    e("div", { className: "form-label" }, "Hair DNA Type"),
+                    e("span", { className: "tag-badge" }, profile.hairType || "straight")
+                  ),
+                  e("div", null,
+                    e("div", { className: "form-label" }, "Local Climate"),
+                    e("span", { className: "tag-badge" }, profile.localClimate || "temperate")
+                  )
+                ),
+
+                (profile.allergens || []).length > 0 && e("div", { style: { marginBottom: "12px" } },
+                  e("div", { className: "form-label", style: { color: "#e53e3e" } }, "🛡️ Ingredient Exclusions"),
+                  e("div", { className: "tag-container" },
+                    (profile.allergens || []).map((c, i) => e("span", { key: i, className: "tag-badge", style: { border: "1px solid #fed7d7", background: "#fff5f5", color: "#e53e3e" } }, c))
+                  )
+                ),
+
+                e("p", { style: { fontSize: "11px", color: "#718096", marginTop: "12px", fontStyle: "italic" } }, "💡 Your customized skincare routine box and recommendations update in real-time based on your saved Skincare & Beauty DNA.")
               )
             ),
 
@@ -2743,11 +2916,25 @@ app.post("/api/admin/curations/generate", async (req, res) => {
           reason = `Perfect concern match for: ${matchingConcerns.join(", ")}`;
         }
 
-        // Climate Adaptation
-        if (profile.zipCode && profile.zipCode.startsWith("90")) {
+        // Dynamic Climate Adaptation (Dry, Humid, Temperate, Cold)
+        const climate = profile.localClimate || "temperate";
+        if (climate === "dry") {
+          // Dry climate prioritizes highly moisturizing serums
           if (product.title.toLowerCase().includes("vitamin c") || product.title.toLowerCase().includes("ceramide")) {
             score += 25;
-            reason += " | Weather/Climate Boost (Zip 90XXX)";
+            reason += " | Weather/Climate Boost (Dry Climate)";
+          }
+        } else if (climate === "humid") {
+          // Humid climate prioritizes clarifying cleansers and masks
+          if (product.title.toLowerCase().includes("charcoal") || product.title.toLowerCase().includes("clay")) {
+            score += 25;
+            reason += " | Weather/Climate Boost (Humid Climate)";
+          }
+        } else if (climate === "cold") {
+          // Cold climate prioritizes protective creams
+          if (product.title.toLowerCase().includes("barrier") || product.title.toLowerCase().includes("restore")) {
+            score += 25;
+            reason += " | Weather/Climate Boost (Cold Climate)";
           }
         }
 
@@ -4337,7 +4524,7 @@ app.get("/", (req, res) => {
             e("h3", { style: { fontSize: "15px", fontWeight: "600", marginBottom: "8px", display: "flex", alignItems: "center" } }, "📋 Shopify Product Tags System Reference"),
             e("p", { style: { color: "#6d7175", fontSize: "12px", marginBottom: "16px" } }, "Apply these standard tags in your Shopify Admin to let the Safety Guard personalize and audit your surprise unboxing gifts automatically:"),
             
-            e("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: "20px" } },
+            e("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "20px" } },
               e("div", null,
                 e("h4", { style: { fontSize: "13px", fontWeight: "bold", color: "#2b6cb0", marginBottom: "8px" } }, "1. Skin Type Tags"),
                 e("ul", { style: { paddingLeft: "20px", fontSize: "12px", color: "#2d3748", lineHeight: "1.6" } },
@@ -4356,6 +4543,15 @@ app.get("/", (req, res) => {
                   e("li", null, e("code", { style: { backgroundColor: "#edf2f7", padding: "2px 4px", borderRadius: "3px" } }, "allergen:parabens"), " — Excludes if customer profile flags paraben allergens."),
                   e("li", null, e("code", { style: { backgroundColor: "#edf2f7", padding: "2px 4px", borderRadius: "3px" } }, "allergen:gluten"), " — Excludes for gluten-free/celiac preference profiles."),
                   e("li", null, e("code", { style: { backgroundColor: "#edf2f7", padding: "2px 4px", borderRadius: "3px" } }, "allergen:nuts"), " — Excludes if formulas use nut-extracted carrier oils (almond, shea).")
+                )
+              ),
+              e("div", null,
+                e("h4", { style: { fontSize: "13px", fontWeight: "bold", color: "#319795", marginBottom: "8px" } }, "3. Climate Adaptation"),
+                e("ul", { style: { paddingLeft: "20px", fontSize: "12px", color: "#2d3748", lineHeight: "1.6" } },
+                  e("li", null, e("code", { style: { backgroundColor: "#edf2f7", padding: "2px 4px", borderRadius: "3px" } }, "climate:dry"), " — Curates dry skin/climate formula hydration."),
+                  e("li", null, e("code", { style: { backgroundColor: "#edf2f7", padding: "2px 4px", borderRadius: "3px" } }, "climate:humid"), " — Curates oil-control and deep clarifying masks."),
+                  e("li", null, e("code", { style: { backgroundColor: "#edf2f7", padding: "2px 4px", borderRadius: "3px" } }, "climate:cold"), " — Curates thick skin barrier protection creams."),
+                  e("li", null, e("code", { style: { backgroundColor: "#edf2f7", padding: "2px 4px", borderRadius: "3px" } }, "climate:temperate"), " — Safe for seasonal moderate climates.")
                 )
               )
             )
