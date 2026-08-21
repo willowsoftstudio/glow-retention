@@ -34,6 +34,7 @@ model Session {
   targetMargin        Float     @default(55.0)
   milestoneOrderCount Int       @default(3)
   giftVariantIds      String    @default("[]")
+  enableSafetyGuard   Boolean   @default(true)
 }
 
 model CustomerProfile {

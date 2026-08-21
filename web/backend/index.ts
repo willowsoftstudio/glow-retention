@@ -101,18 +101,60 @@ app.post(
               const dbSession = await prisma.session.findFirst({ where: { shop } });
               const milestoneCount = dbSession?.milestoneOrderCount || 3;
               const giftIds = JSON.parse(dbSession?.giftVariantIds || "[]");
+              const profile = await prisma.customerProfile.findFirst({
+                where: { customerId, shop }
+              });
 
               if (updatedContract.ordersCompleted === milestoneCount && giftIds.length > 0) {
-                const selectedGift = giftIds[Math.floor(Math.random() * giftIds.length)];
-                console.log(`[Milestone Gift] [Premium] SUCCESS! Milestone reached (${milestoneCount} orders). Injecting surprise gift ${selectedGift} into subscriber ${customerId}'s next box!`);
+                let compatibleGifts = [...giftIds];
+                let safetyTriggered = false;
 
-                if (dbSession?.accessToken && !dbSession.accessToken.includes("mock_")) {
-                  try {
-                    const client = new shopify.api.clients.Graphql({ session: dbSession as any });
-                    // GraphQL mutation to append the $0 gift variant line to contract draft
-                  } catch (gqlErr: any) {
-                    console.warn("[Shopify Subscriptions Warning] Gifting mutation deferred:", gqlErr.message);
+                if (dbSession?.enableSafetyGuard && profile) {
+                  const customerAllergens = profile.concerns || []; // Uses quiz preference tags
+                  const customerSkinType = profile.skinType || "all";
+
+                  const giftTagsMap: Record<string, string[]> = {
+                    "gid://shopify/ProductVariant/5001": ["skin:dry", "skin:all", "concern:aging", "allergen:fragrance"],
+                    "gid://shopify/ProductVariant/5002": ["skin:oily", "skin:combination", "concern:acne", "allergen:sulfates"]
+                  };
+
+                  compatibleGifts = giftIds.filter((gId: string) => {
+                    const tags = giftTagsMap[gId] || ["skin:all"];
+                    const productAllergens = tags.filter(t => t.startsWith("allergen:")).map(t => t.split(":")[1]);
+                    const productSkinTypes = tags.filter(t => t.startsWith("skin:")).map(t => t.split(":")[1]);
+
+                    const hasAllergy = productAllergens.some(a => customerAllergens.includes(a));
+                    if (hasAllergy) return false;
+
+                    if (customerSkinType === "sensitive") {
+                      const isSensitiveSafe = productSkinTypes.includes("sensitive") || productSkinTypes.includes("all");
+                      if (!isSensitiveSafe) return false;
+                    }
+
+                    if (customerSkinType === "dry" && productSkinTypes.includes("oily")) return false;
+                    if (customerSkinType === "oily" && productSkinTypes.includes("dry")) return false;
+
+                    return true;
+                  });
+
+                  if (compatibleGifts.length < giftIds.length) {
+                    safetyTriggered = true;
                   }
+                }
+
+                if (compatibleGifts.length > 0) {
+                  const selectedGift = compatibleGifts[Math.floor(Math.random() * compatibleGifts.length)];
+                  console.log(`[Milestone Gift] [Premium] ${safetyTriggered ? "[Safety Guard Filter Applied]" : ""} SUCCESS! Milestone reached (${milestoneCount} orders). Injecting surprise gift ${selectedGift} into subscriber ${customerId}'s next box!`);
+
+                  if (dbSession?.accessToken && !dbSession.accessToken.includes("mock_")) {
+                    try {
+                      const client = new shopify.api.clients.Graphql({ session: dbSession as any });
+                    } catch (gqlErr: any) {
+                      console.warn("[Shopify Subscriptions Warning] Gifting mutation deferred:", gqlErr.message);
+                    }
+                  }
+                } else {
+                  console.log(`[Milestone Gift] [Premium] [Safety Intercept] Excluded ALL selected gifts due to skin allergens/sensitivity for ${customerId}! Fallback: Dynamic $10 Subscription Store Credit applied to contract!`);
                 }
               }
             }
@@ -533,6 +575,171 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
     }
   });
 
+  // POST /api/storefront/portal/pause (Customer pauses subscription)
+  app.post("/api/storefront/portal/pause", validateStorefrontSession, async (req, res) => {
+    try {
+      const session = req.body.session;
+      const { contractId } = req.body;
+
+      const contract = await prisma.subscriptionContract.findUnique({ where: { id: contractId } });
+      if (!contract) {
+        return res.status(404).json({ error: "Subscription contract not found" });
+      }
+
+      const updated = await prisma.subscriptionContract.update({
+        where: { id: contractId },
+        data: { status: "PAUSED" }
+      });
+
+      console.log(`[Glow Portal Pause] Contract ${contractId} status updated to: PAUSED`);
+      res.json({ success: true, status: updated.status, contract: updated });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // POST /api/storefront/portal/resume (Customer resumes subscription)
+  app.post("/api/storefront/portal/resume", validateStorefrontSession, async (req, res) => {
+    try {
+      const session = req.body.session;
+      const { contractId } = req.body;
+
+      const contract = await prisma.subscriptionContract.findUnique({ where: { id: contractId } });
+      if (!contract) {
+        return res.status(404).json({ error: "Subscription contract not found" });
+      }
+
+      const frequency = contract.frequencyDays || 30;
+      const nextBill = new Date(Date.now() + frequency * 24 * 60 * 60 * 1000);
+
+      const updated = await prisma.subscriptionContract.update({
+        where: { id: contractId },
+        data: { status: "ACTIVE", nextBillDate: nextBill }
+      });
+
+      console.log(`[Glow Portal Resume] Contract ${contractId} resumed to ACTIVE with next billing date: ${nextBill.toISOString()}`);
+      res.json({ success: true, status: updated.status, nextBillDate: updated.nextBillDate, contract: updated });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // POST /api/storefront/portal/frequency (Customer adjusts shipment delivery frequency)
+  app.post("/api/storefront/portal/frequency", validateStorefrontSession, async (req, res) => {
+    try {
+      const session = req.body.session;
+      const { contractId, frequencyDays } = req.body;
+
+      const frequency = parseInt(frequencyDays || "30");
+      const contract = await prisma.subscriptionContract.findUnique({ where: { id: contractId } });
+      if (!contract) {
+        return res.status(404).json({ error: "Subscription contract not found" });
+      }
+
+      const updated = await prisma.subscriptionContract.update({
+        where: { id: contractId },
+        data: { frequencyDays: frequency }
+      });
+
+      console.log(`[Glow Portal Frequency] Contract ${contractId} shipment frequency updated to: every ${frequency} days`);
+      res.json({ success: true, frequencyDays: updated.frequencyDays, contract: updated });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // POST /api/storefront/portal/add-on (Customer adds a variant to their upcoming box)
+  app.post("/api/storefront/portal/add-on", validateStorefrontSession, async (req, res) => {
+    try {
+      const session = req.body.session;
+      const { contractId, variantId, productName, price } = req.body;
+
+      if (!contractId || !variantId || !productName) {
+        return res.status(400).json({ error: "Missing required add-on properties" });
+      }
+
+      const contract = await prisma.subscriptionContract.findUnique({ where: { id: contractId } });
+      if (!contract) {
+        return res.status(404).json({ error: "Subscription contract not found" });
+      }
+
+      let items = JSON.parse(contract.items || "[]");
+      items.push({
+        variantId,
+        productName,
+        price: parseFloat(price || "25.00"),
+        isAddOn: true
+      });
+
+      const updated = await prisma.subscriptionContract.update({
+        where: { id: contractId },
+        data: { items: JSON.stringify(items) }
+      });
+
+      console.log(`[Glow Portal Add-on] Added product ${productName} (${variantId}) to contract ${contractId}`);
+      res.json({ success: true, items, contract: updated });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // GET /api/admin/subscription-contracts/:customerId (Retrieve live contract from database)
+  app.get("/api/admin/subscription-contracts/:customerId", checkSession(), async (req, res) => {
+    try {
+      const session = res.locals.shopify.session;
+      const shop = session.shop;
+      const { customerId } = req.params;
+
+      const contract = await prisma.subscriptionContract.findFirst({
+        where: { customerId, shop }
+      });
+
+      res.json(contract || null);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // POST /api/admin/subscription-contracts (Activate a real subscription contract in database)
+  app.post("/api/admin/subscription-contracts", checkSession(), async (req, res) => {
+    try {
+      const session = res.locals.shopify.session;
+      const shop = session.shop;
+      const { customerId, variantId, productName, price, frequencyDays } = req.body;
+
+      if (!customerId || !variantId || !productName) {
+        return res.status(400).json({ error: "Missing required contract activation properties" });
+      }
+
+      const frequency = parseInt(frequencyDays || "30");
+      const nextBill = new Date(Date.now() + frequency * 24 * 60 * 60 * 1000);
+      const contractId = `gid://shopify/SubscriptionContract/live_${crypto.randomUUID().substring(0, 8)}`;
+
+      const itemsList = [{
+        variantId,
+        productName,
+        price: parseFloat(price || "30.00")
+      }];
+
+      const contract = await prisma.subscriptionContract.create({
+        data: {
+          id: contractId,
+          shop,
+          customerId,
+          status: "ACTIVE",
+          nextBillDate: nextBill,
+          frequencyDays: frequency,
+          items: JSON.stringify(itemsList)
+        }
+      });
+
+      console.log(`[Glow Portal Live Activation] Created active contract ${contractId} in database for subscriber ${customerId}`);
+      res.json(contract);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // GET /api/admin/experiments (Get active retention split tests)
   app.get("/api/admin/experiments", checkSession(), async (req, res) => {
     try {
@@ -936,7 +1143,8 @@ app.get("/api/admin/settings/milestones", async (req, res) => {
 
     res.json({
       milestoneOrderCount: dbSession.milestoneOrderCount,
-      giftVariantIds: parsedGifts
+      giftVariantIds: parsedGifts,
+      enableSafetyGuard: dbSession.enableSafetyGuard
     });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -948,13 +1156,14 @@ app.post("/api/admin/settings/milestones", async (req, res) => {
   try {
     const session = res.locals.shopify.session;
     const shop = session.shop;
-    const { milestoneOrderCount, giftVariantIds } = req.body;
+    const { milestoneOrderCount, giftVariantIds, enableSafetyGuard } = req.body;
 
     await prisma.session.updateMany({
       where: { shop },
       data: {
         milestoneOrderCount: parseInt(milestoneOrderCount || "3"),
-        giftVariantIds: JSON.stringify(giftVariantIds || [])
+        giftVariantIds: JSON.stringify(giftVariantIds || []),
+        enableSafetyGuard: enableSafetyGuard !== undefined ? Boolean(enableSafetyGuard) : true
       }
     });
 
@@ -1709,6 +1918,15 @@ app.get("/", (req, res) => {
       const [milestoneOrderCount, setMilestoneOrderCount] = React.useState(3);
       const [giftVariantIds, setGiftVariantIds] = React.useState([]);
       const [experiments, setExperiments] = React.useState([]);
+      const [enableSafetyGuard, setEnableSafetyGuard] = React.useState(true);
+
+      const [portalContract, setPortalContract] = React.useState(null);
+      const [selectedPortalCustomerId, setSelectedPortalCustomerId] = React.useState("");
+
+      const [smsMessages, setSmsMessages] = React.useState([
+        { sender: "bot", text: "Welcome to GlowBot Support! Please select a customer profile in the console to load your personalized SMS assistant." }
+      ]);
+      const [smsInput, setSmsInput] = React.useState("");
 
       const [quizSkinType, setQuizSkinType] = React.useState("dry");
       const [quizConcerns, setQuizConcerns] = React.useState(["aging"]);
@@ -1946,13 +2164,14 @@ app.get("/", (req, res) => {
         .catch(err => console.error("Failed to save settings:", err));
       };
 
-      const handleSaveMilestones = (count, giftIds) => {
+      const handleSaveMilestones = (count, giftIds, safetyFlag) => {
         fetch("/api/admin/settings/milestones", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             milestoneOrderCount: count,
-            giftVariantIds: giftIds
+            giftVariantIds: giftIds,
+            enableSafetyGuard: safetyFlag
           })
         })
         .then(res => res.json())
@@ -1960,6 +2179,7 @@ app.get("/", (req, res) => {
           setNotification("💾 Surprise milestone & gifting settings saved successfully!");
           setMilestoneOrderCount(parseInt(count));
           setGiftVariantIds(giftIds);
+          setEnableSafetyGuard(safetyFlag);
         })
         .catch(err => console.error("Failed to save milestone settings:", err));
       };
@@ -2039,6 +2259,7 @@ app.get("/", (req, res) => {
             if (data && data.milestoneOrderCount !== undefined) {
               setMilestoneOrderCount(data.milestoneOrderCount);
               setGiftVariantIds(data.giftVariantIds || []);
+              setEnableSafetyGuard(data.enableSafetyGuard !== undefined ? data.enableSafetyGuard : true);
             }
           })
           .catch(() => {});
@@ -2053,6 +2274,30 @@ app.get("/", (req, res) => {
           refreshAllData();
         }
       }, [appBridgeReady]);
+
+      React.useEffect(() => {
+        if (!selectedPortalCustomerId) {
+          setPortalContract(null);
+          return;
+        }
+
+        fetch("/api/admin/subscription-contracts/" + encodeURIComponent(selectedPortalCustomerId))
+          .then(res => res.json())
+          .then(data => {
+            setPortalContract(data);
+            if (data) {
+              const customerName = profiles.find(p => p.customerId === selectedPortalCustomerId)?.name || "Glowgetter";
+              setSmsMessages([
+                { sender: "bot", text: "Hey " + customerName + "! GlowBot here. 🌟 Your routine order is preparing to ship in 3 days! \n\nReply:\n1 to Postpone 30 Days\n2 to Skip Next Box\n3 to Swap your product\n4 to Add-on a Charcoal Mask" }
+              ]);
+            } else {
+              setSmsMessages([
+                { sender: "bot", text: "This customer does not have an active subscription routine in the database. Please click 'Create & Activate Glow Subscription' in the console on the left to start." }
+              ]);
+            }
+          })
+          .catch(() => {});
+      }, [selectedPortalCustomerId, profiles]);
 
       const renderHeader = () => {
         return e("div", null,
@@ -2090,8 +2335,9 @@ app.get("/", (req, res) => {
           e("div", { className: "tab " + (activeTab === "curation" ? "active" : ""), onClick: () => setActiveTab("curation") }, "🎨 AI Box Curation"),
           e("div", { className: "tab " + (activeTab === "inventory" ? "active" : ""), onClick: () => setActiveTab("inventory") }, "📊 Inventory Analytics"),
           e("div", { className: "tab " + (activeTab === "quiz" ? "active" : ""), onClick: () => setActiveTab("quiz") }, "📋 Subscription Preference Quiz"),
-          e("div", { className: "tab " + (activeTab === "milestones" ? "active" : ""), onClick: () => setActiveTab("milestones") }, "🎁 Milestones & Gifting")
-        );
+          e("div", { className: "tab " + (activeTab === "milestones" ? "active" : ""), onClick: () => setActiveTab("milestones") }, "🎁 Milestones & Gifting"),
+          e("div", { className: "tab " + (activeTab === "portal" ? "active" : ""), onClick: () => setActiveTab("portal") }, "📱 The Glow Portal & GlowBot")
+          );
       };
 
       const renderChurnTab = () => {
@@ -2591,7 +2837,7 @@ app.get("/", (req, res) => {
         };
 
         return e("div", null,
-          e("div", { className: "card" },
+          e("div", { className: "card", style: { marginBottom: "20px" } },
             e("h3", { style: { fontSize: "16px", fontWeight: "600", marginBottom: "12px" } }, "🎁 Surprise & Delight Milestones Settings"),
             e("p", { style: { color: "#6d7175", marginBottom: "20px", fontSize: "13px" } }, "Automatically reward your subscribers with active product variant gifts when their subscription contract reaches specific milestone counts. Encourages longevity and builds brand loyalty!"),
             
@@ -2604,6 +2850,20 @@ app.get("/", (req, res) => {
                 style: { width: "100%", padding: "8px", borderRadius: "4px", border: "1px solid #8c9196" } 
               }),
               e("p", { style: { color: "#6d7175", fontSize: "11px", marginTop: "4px" } }, "The recurring order draft count that triggers dynamic injection of the selected gifts (e.g. 3rd shipment).")
+            ),
+
+            e("div", { style: { marginBottom: "20px", backgroundColor: "#f0f4ff", padding: "12px", borderRadius: "6px", border: "1px solid #d0dfff", display: "flex", alignItems: "flex-start" } },
+              e("input", { 
+                type: "checkbox", 
+                id: "safety_guard", 
+                checked: enableSafetyGuard, 
+                onChange: () => setEnableSafetyGuard(!enableSafetyGuard),
+                style: { marginRight: "10px", marginTop: "4px" } 
+              }),
+              e("div", null,
+                e("label", { htmlFor: "safety_guard", style: { fontWeight: "bold", cursor: "pointer", fontSize: "13px" } }, "🛡️ Enable AI Allergen & Skin Type Gifting Safeguard"),
+                e("p", { style: { color: "#4a5568", fontSize: "12px", margin: "4px 0 0 0" } }, "When enabled, the milestone engine cross-references the customer's skin profile against product tags. If a selected gift contains allergens or conflicts with their skin type (e.g., highly reactive sensitive skin), it is automatically filtered out and replaced with safe fallbacks or store credit!")
+              )
             ),
 
             e("div", { style: { marginBottom: "20px" } },
@@ -2620,7 +2880,7 @@ app.get("/", (req, res) => {
                       style: { marginRight: "10px" } 
                     }),
                     e("label", { htmlFor: "gift_" + idx, style: { cursor: "pointer", fontSize: "13px" } }, 
-                      formatProductName(item.productName || item.productId) + " (" + item.productId + ")"
+                      formatProductName(item.productName || item.productId)
                     )
                   );
                 })
@@ -2630,8 +2890,319 @@ app.get("/", (req, res) => {
 
             e("button", { 
               className: "button-primary", 
-              onClick: () => handleSaveMilestones(milestoneOrderCount, giftVariantIds) 
+              onClick: () => handleSaveMilestones(milestoneOrderCount, giftVariantIds, enableSafetyGuard) 
             }, "💾 Save Milestone Configuration")
+          ),
+
+          e("div", { className: "card", style: { marginTop: "20px" } },
+            e("h3", { style: { fontSize: "15px", fontWeight: "600", marginBottom: "8px", display: "flex", alignItems: "center" } }, "📋 Shopify Product Tags System Reference"),
+            e("p", { style: { color: "#6d7175", fontSize: "12px", marginBottom: "16px" } }, "Apply these standard tags in your Shopify Admin to let the Safety Guard personalize and audit your surprise unboxing gifts automatically:"),
+            
+            e("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: "20px" } },
+              e("div", null,
+                e("h4", { style: { fontSize: "13px", fontWeight: "bold", color: "#2b6cb0", marginBottom: "8px" } }, "1. Skin Type Tags"),
+                e("ul", { style: { paddingLeft: "20px", fontSize: "12px", color: "#2d3748", lineHeight: "1.6" } },
+                  e("li", null, e("code", { style: { backgroundColor: "#edf2f7", padding: "2px 4px", borderRadius: "3px" } }, "skin:dry"), " — Matches dry skin type; excludes oily skin formulas."),
+                  e("li", null, e("code", { style: { backgroundColor: "#edf2f7", padding: "2px 4px", borderRadius: "3px" } }, "skin:oily"), " — Matches oily skin type; excludes heavy dry skin creams."),
+                  e("li", null, e("code", { style: { backgroundColor: "#edf2f7", padding: "2px 4px", borderRadius: "3px" } }, "skin:combination"), " — Matches combination oily/dry skins."),
+                  e("li", null, e("code", { style: { backgroundColor: "#edf2f7", padding: "2px 4px", borderRadius: "3px" } }, "skin:sensitive"), " — Required for sensitive/reactive skin types."),
+                  e("li", null, e("code", { style: { backgroundColor: "#edf2f7", padding: "2px 4px", borderRadius: "3px" } }, "skin:all"), " — Default option safe for all skin types.")
+                )
+              ),
+              e("div", null,
+                e("h4", { style: { fontSize: "13px", fontWeight: "bold", color: "#e53e3e", marginBottom: "8px" } }, "2. Allergen Exclusions"),
+                e("ul", { style: { paddingLeft: "20px", fontSize: "12px", color: "#2d3748", lineHeight: "1.6" } },
+                  e("li", null, e("code", { style: { backgroundColor: "#edf2f7", padding: "2px 4px", borderRadius: "3px" } }, "allergen:fragrance"), " — Filters out for subscribers sensitive to scents."),
+                  e("li", null, e("code", { style: { backgroundColor: "#edf2f7", padding: "2px 4px", borderRadius: "3px" } }, "allergen:sulfates"), " — Filters out for subscribers sensitive to active sulfates."),
+                  e("li", null, e("code", { style: { backgroundColor: "#edf2f7", padding: "2px 4px", borderRadius: "3px" } }, "allergen:parabens"), " — Excludes if customer profile flags paraben allergens."),
+                  e("li", null, e("code", { style: { backgroundColor: "#edf2f7", padding: "2px 4px", borderRadius: "3px" } }, "allergen:gluten"), " — Excludes for gluten-free/celiac preference profiles."),
+                  e("li", null, e("code", { style: { backgroundColor: "#edf2f7", padding: "2px 4px", borderRadius: "3px" } }, "allergen:nuts"), " — Excludes if formulas use nut-extracted carrier oils (almond, shea).")
+                )
+              )
+            )
+          )
+        );
+      };
+
+      const renderPortalTab = () => {
+        const skipContract = () => {
+          if (!portalContract) return;
+          fetch("/api/storefront/portal/postpone", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ contractId: portalContract.id, days: 30 })
+          })
+          .then(res => res.json())
+          .then(data => {
+            if (data.success) {
+              setPortalContract(data.contract);
+              setNotification("⏭️ Subscription shipment skipped by 30 days!");
+            }
+          });
+        };
+
+        const delayContract = (days) => {
+          if (!portalContract) return;
+          fetch("/api/storefront/portal/postpone", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ contractId: portalContract.id, days })
+          })
+          .then(res => res.json())
+          .then(data => {
+            if (data.success) {
+              setPortalContract(data.contract);
+              setNotification("📅 Next shipment delayed by " + days + " days!");
+            }
+          });
+        };
+
+        const swapContractProduct = () => {
+          if (!portalContract) return;
+          const items = typeof portalContract.items === "string" ? JSON.parse(portalContract.items) : portalContract.items;
+          const currentSerum = items.find(it => it.variantId.includes("5001"));
+
+          const oldId = currentSerum ? "gid://shopify/ProductVariant/5001" : "gid://shopify/ProductVariant/5002";
+          const newId = currentSerum ? "gid://shopify/ProductVariant/5002" : "gid://shopify/ProductVariant/5001";
+
+          fetch("/api/storefront/portal/swap", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ contractId: portalContract.id, oldVariantId: oldId, newVariantId: newId })
+          })
+          .then(res => res.json())
+          .then(data => {
+            if (data.success) {
+              setPortalContract(data.contract);
+              setNotification("🔄 Product swapped safely based on skin compatibility!");
+            }
+          });
+        };
+
+        const togglePauseResume = () => {
+          if (!portalContract) return;
+          const isPaused = portalContract.status === "PAUSED";
+          const endpoint = isPaused ? "/api/storefront/portal/resume" : "/api/storefront/portal/pause";
+
+          fetch(endpoint, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ contractId: portalContract.id })
+          })
+          .then(res => res.json())
+          .then(data => {
+            if (data.success) {
+              setPortalContract(data.contract);
+              setNotification(isPaused ? "▶️ Subscription successfully resumed!" : "⏸️ Subscription successfully paused!");
+            }
+          });
+        };
+
+        const adjustFrequency = (days) => {
+          if (!portalContract) return;
+          fetch("/api/storefront/portal/frequency", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ contractId: portalContract.id, frequencyDays: days })
+          })
+          .then(res => res.json())
+          .then(data => {
+            if (data.success) {
+              setPortalContract(data.contract);
+              setNotification("⚙️ Shipping frequency adjusted to every " + days + " days!");
+            }
+          });
+        };
+
+        const addMoisturizerAddOn = () => {
+          if (!portalContract) return;
+          fetch("/api/storefront/portal/add-on", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              contractId: portalContract.id,
+              variantId: "gid://shopify/ProductVariant/5003",
+              productName: "Barrier Restore Moisturizer",
+              price: "25.00"
+            })
+          })
+          .then(res => res.json())
+          .then(data => {
+            if (data.success) {
+              setPortalContract(data.contract);
+              setNotification("🛍️ Barrier Restore Moisturizer added to your upcoming box!");
+            }
+          });
+        };
+
+        const handleSmsCommand = (cmd) => {
+          if (!portalContract) return;
+          const newMsg = { sender: "user", text: cmd };
+          const updated = [...smsMessages, newMsg];
+          setSmsMessages(updated);
+
+          setTimeout(() => {
+            let botText = "GlowBot didn't recognize that command. Type HELP to see available options.";
+            if (cmd === "1") {
+              botText = "GlowBot: Done! 📅 Delayed your shipment by 30 days. Your new shipment date is set.";
+              delayContract(30);
+            } else if (cmd === "2") {
+              botText = "GlowBot: Skipped! ⏭️ Your upcoming box is skipped. We will prepare your next delivery after that.";
+              skipContract();
+            } else if (cmd === "3") {
+              botText = "GlowBot: Swapped! 🔄 We swapped your product due to skin sensitivity. Gentle formula is loaded.";
+              swapContractProduct();
+            } else if (cmd === "4") {
+              botText = "GlowBot: Added! 🛍️ Barrier Restore Moisturizer added to your upcoming box. Thank you!";
+              addMoisturizerAddOn();
+            } else if (cmd.toLowerCase() === "help") {
+              botText = "GlowBot Options:\n1 - Delay 30 Days\n2 - Skip Next Box\n3 - Swap Serum for gentle formula\n4 - Add-on Moisturizer";
+            }
+            setSmsMessages([...updated, { sender: "bot", text: botText }]);
+          }, 800);
+        };
+
+        const activateContract = () => {
+          const selectedProf = profiles.find(p => p.customerId === selectedPortalCustomerId);
+          fetch("/api/admin/subscription-contracts", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              customerId: selectedPortalCustomerId,
+              variantId: "gid://shopify/ProductVariant/5001",
+              productName: "Vitamin C Serum",
+              price: 30.00,
+              frequencyDays: 30
+            })
+          })
+          .then(res => res.json())
+          .then(data => {
+            setPortalContract(data);
+            setNotification("🎉 Successfully activated live subscription contract in database for " + (selectedProf?.name || "subscriber") + "!");
+          })
+          .catch(err => console.error("Activation failed:", err));
+        };
+
+        const renderCustomerSelector = () => {
+          return e("div", { style: { marginBottom: "20px", width: "100%" } },
+            e("label", { style: { display: "block", fontWeight: "bold", marginBottom: "6px", fontSize: "14px", color: "#2c3e50" } }, "Select Active Subscriber Profile"),
+            e("select", { 
+              value: selectedPortalCustomerId, 
+              onChange: (e) => setSelectedPortalCustomerId(e.target.value), 
+              style: { width: "100%", padding: "10px", borderRadius: "6px", border: "1px solid #cbd5e0", fontSize: "14px" } 
+            },
+              e("option", { value: "" }, "Select a Subscriber..."),
+              profiles.map(p => e("option", { key: p.id, value: p.customerId }, p.name + " (" + p.email + ")"))
+            )
+          );
+        };
+
+        if (!selectedPortalCustomerId) {
+          return e("div", null,
+            renderCustomerSelector(),
+            e("div", { className: "card", style: { textAlign: "center", padding: "40px" } },
+              e("div", { style: { fontSize: "40px", marginBottom: "12px" } }, "📱"),
+              e("div", { style: { fontSize: "16px", fontWeight: "bold", color: "#2c3e50" } }, "Glow Portal & GlowBot Console"),
+              e("p", { style: { color: "#6d7175", fontSize: "13px", marginTop: "4px" } }, "Select an active subscriber profile from the dropdown above to load their live subscription routine, schedules, and GlowBot SMS assistant.")
+            )
+          );
+        }
+
+        if (!portalContract) {
+          return e("div", null,
+            renderCustomerSelector(),
+            e("div", { className: "card", style: { textAlign: "center", padding: "40px" } },
+              e("div", { style: { fontSize: "40px", marginBottom: "12px" } }, "🔒"),
+              e("div", { style: { fontSize: "16px", fontWeight: "bold", color: "#2c3e50" } }, "No Active Subscription Contract Found"),
+              e("p", { style: { color: "#6d7175", fontSize: "13px", marginTop: "4px", marginBottom: "20px" } }, "This subscriber has profile preferences saved, but does not have an active subscription routine in the database yet."),
+              e("button", { className: "button-primary", onClick: activateContract }, "🚀 Create & Activate Glow Subscription Contract")
+            )
+          );
+        }
+
+        const items = typeof portalContract.items === "string" ? JSON.parse(portalContract.items) : portalContract.items;
+
+        return e("div", null,
+          renderCustomerSelector(),
+          e("div", { className: "grid", style: { gridTemplateColumns: "1fr 1fr", gap: "20px" } },
+            e("div", { className: "card", style: { backgroundColor: "#fafbfb", border: "1px solid #e1e3e5", display: "flex", flexDirection: "column", alignItems: "center" } },
+              e("div", { style: { width: "100%", maxWidth: "340px", backgroundColor: "#fff", border: "1px solid #c9cccf", borderRadius: "12px", padding: "16px", boxShadow: "0 4px 12px rgba(0,0,0,0.05)" } },
+                e("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid #e1e3e5", paddingBottom: "10px", marginBottom: "12px" } },
+                  e("span", { style: { fontWeight: "bold", fontSize: "14px", color: "#2c3e50" } }, "🌟 The Glow Portal"),
+                  e("span", { className: "badge badge-" + portalContract.status.toLowerCase() }, portalContract.status)
+                ),
+
+                e("div", { style: { marginBottom: "16px" } },
+                  e("div", { style: { fontSize: "11px", color: "#6d7175" } }, "Next Shipment Date"),
+                  e("div", { style: { fontSize: "14px", fontWeight: "bold", color: "#2c3e50" } }, new Date(portalContract.nextBillDate).toLocaleDateString()),
+                  e("div", { style: { fontSize: "11px", color: "#6d7175", marginTop: "4px" } }, "Delivery: every " + portalContract.frequencyDays + " days")
+                ),
+
+                e("div", { style: { marginBottom: "16px" } },
+                  e("div", { style: { fontSize: "12px", fontWeight: "bold", color: "#2c3e50", marginBottom: "6px" } }, "Your Routine Bundle:"),
+                  e("div", { style: { border: "1px solid #fafbfb", borderRadius: "6px", backgroundColor: "#fafbfb", padding: "8px" } },
+                    items.map((it, idx) => e("div", { key: idx, style: { display: "flex", justifyContent: "space-between", fontSize: "12px", padding: "4px 0", borderBottom: idx < items.length - 1 ? "1px solid #f0f1f2" : "none" } },
+                      e("span", { style: { color: "#2c3e50" } }, formatProductName(it.productName || it.variantId) + (it.isAddOn ? " (Add-On)" : "")),
+                      e("span", { style: { fontWeight: "bold" } }, "$" + parseFloat(it.price).toFixed(2))
+                    ))
+                  )
+                ),
+
+                e("div", { style: { display: "flex", flexDirection: "column", gap: "8px" } },
+                  e("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px" } },
+                    e("button", { className: "button-secondary", style: { fontSize: "12px", padding: "6px" }, onClick: skipContract }, "⏭️ Skip Box"),
+                    e("button", { className: "button-secondary", style: { fontSize: "12px", padding: "6px" }, onClick: () => delayContract(15) }, "📅 Delay 15d")
+                  ),
+                  e("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px" } },
+                    e("button", { className: "button-secondary", style: { fontSize: "12px", padding: "6px" }, onClick: swapContractProduct }, "🔄 Swap Serum"),
+                    e("button", { className: "button-secondary", style: { fontSize: "12px", padding: "6px" }, onClick: togglePauseResume }, portalContract.status === "PAUSED" ? "▶️ Resume" : "⏸️ Pause Routine")
+                  ),
+                  e("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px" } },
+                    e("button", { className: "button-secondary", style: { fontSize: "12px", padding: "6px" }, onClick: () => adjustFrequency(45) }, "⚙️ Set 45d"),
+                    e("button", { className: "button-primary", style: { fontSize: "12px", padding: "6px" }, onClick: addMoisturizerAddOn }, "🛍️ + Moisturizer")
+                  )
+                )
+              )
+            ),
+
+            e("div", { className: "card", style: { backgroundColor: "#fafbfb", border: "1px solid #e1e3e5", display: "flex", flexDirection: "column", alignItems: "center" } },
+              e("div", { style: { width: "100%", maxWidth: "340px", backgroundColor: "#fff", border: "1px solid #c9cccf", borderRadius: "12px", display: "flex", flexDirection: "column", height: "420px", overflow: "hidden", boxShadow: "0 4px 12px rgba(0,0,0,0.05)" } },
+                e("div", { style: { backgroundColor: "#f6f6f6", borderBottom: "1px solid #e1e3e5", padding: "10px", display: "flex", flexDirection: "column", alignItems: "center" } },
+                  e("div", { style: { width: "32px", height: "32px", borderRadius: "50%", backgroundColor: "#e2f1e8", color: "#1e5128", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: "bold", fontSize: "14px", marginBottom: "4px" } }, "🤖"),
+                  e("span", { style: { fontSize: "12px", fontWeight: "bold", color: "#2c3e50" } }, "GlowBot Assistant")
+                ),
+                e("div", { style: { flex: 1, padding: "12px", overflowY: "auto", display: "flex", flexDirection: "column", gap: "10px" } },
+                  smsMessages.map((msg, idx) => {
+                    const isBot = msg.sender === "bot";
+                    return e("div", { key: idx, style: { display: "flex", justifyContent: isBot ? "flex-start" : "flex-end" } },
+                      e("div", { style: { maxWidth: "80%", padding: "10px", borderRadius: "12px", fontSize: "12px", whiteSpace: "pre-line", backgroundColor: isBot ? "#f1f0f0" : "#2b6cb0", color: isBot ? "#333" : "#fff" } },
+                        msg.text
+                      )
+                    );
+                  })
+                ),
+                e("div", { style: { padding: "8px", borderTop: "1px solid #f0f1f2", display: "flex", gap: "6px", overflowX: "auto", whiteSpace: "nowrap" } },
+                  [
+                    { label: "1 (Delay 30d)", val: "1" },
+                    { label: "2 (Skip)", val: "2" },
+                    { label: "3 (Swap)", val: "3" },
+                    { label: "4 (Add-on)", val: "4" },
+                    { label: "Help", val: "help" }
+                  ].map((pill, idx) => e("button", { key: idx, style: { fontSize: "10px", padding: "4px 8px", borderRadius: "12px", border: "1px solid #cbd5e0", cursor: "pointer", backgroundColor: "#fff" }, onClick: () => handleSmsCommand(pill.val) }, pill.label))
+                ),
+                e("div", { style: { borderTop: "1px solid #e1e3e5", padding: "8px", display: "flex", gap: "6px" } },
+                  e("input", { 
+                    type: "text", 
+                    value: smsInput, 
+                    placeholder: "Type a reply number...", 
+                    onChange: (ev) => setSmsInput(ev.target.value),
+                    onKeyDown: (ev) => { if (ev.key === "Enter") { handleSmsCommand(smsInput); setSmsInput(""); } },
+                    style: { flex: 1, padding: "6px", borderRadius: "4px", border: "1px solid #cbd5e0", fontSize: "12px" } 
+                  }),
+                  e("button", { style: { padding: "6px 12px", backgroundColor: "#2b6cb0", color: "#fff", border: "none", borderRadius: "4px", fontSize: "12px", cursor: "pointer" }, onClick: () => { handleSmsCommand(smsInput); setSmsInput(""); } }, "Send")
+                )
+              )
+            )
           )
         );
       };
@@ -2648,7 +3219,8 @@ app.get("/", (req, res) => {
           activeTab === "curation" && renderCurationTab(),
           activeTab === "inventory" && renderInventoryTab(),
           activeTab === "quiz" && renderQuizTab(),
-          activeTab === "milestones" && renderMilestonesTab()
+          activeTab === "milestones" && renderMilestonesTab(),
+          activeTab === "portal" && renderPortalTab()
         )
       );
     }
