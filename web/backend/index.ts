@@ -2655,7 +2655,7 @@ app.get("/", (req, res) => {
             e("div", { style: { marginBottom: "16px" } },
               e("label", { style: { display: "block", fontWeight: "bold", marginBottom: "6px" } }, "Select Customer"),
               e("select", { value: selectedQuizCustomerId, onChange: (e) => setSelectedQuizCustomerId(e.target.value), style: { width: "100%", padding: "8px", borderRadius: "4px", border: "1px solid #8c9196" } },
-                shopifyCustomers.map(sc => e("option", { key: sc.id, value: sc.id }, sc.name + " (" + sc.email + ")")),
+                profiles.map(p => e("option", { key: p.customerId, value: p.customerId }, p.name + " (" + p.email + ")")),
                 e("option", { value: "new" }, "➕ Enter Custom/New Customer Info")
               )
             ),
