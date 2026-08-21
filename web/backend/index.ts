@@ -1023,6 +1023,133 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
       font-weight: 800;
       color: #2c3e50;
     }
+    /* Advanced Bundle Elements */
+    .quantity-selector {
+      display: inline-flex;
+      align-items: center;
+      background: #edf2f7;
+      border-radius: 20px;
+      padding: 2px 4px;
+      gap: 8px;
+      border: 1px solid #cbd5e0;
+      margin-top: 8px;
+    }
+    .quantity-btn {
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      border: none;
+      background: white;
+      color: #2b6cb0;
+      font-weight: bold;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      font-size: 14px;
+      padding: 0;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+      transition: background 0.15s;
+    }
+    .quantity-btn:hover {
+      background: #edf2f7;
+    }
+    .quantity-count {
+      font-size: 13px;
+      font-weight: 700;
+      color: #2d3748;
+      min-width: 14px;
+      text-align: center;
+    }
+    .slot-container {
+      display: flex;
+      justify-content: center;
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+    .slot {
+      width: 70px;
+      height: 70px;
+      border-radius: 12px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+      box-sizing: border-box;
+      transition: all 0.25s ease;
+    }
+    .slot-empty {
+      border: 2px dashed #cbd5e0;
+      background: #f8fafc;
+      color: #a0aec0;
+      font-size: 20px;
+      font-weight: 300;
+    }
+    .slot-empty::after {
+      content: "ADD";
+      font-size: 8px;
+      font-weight: bold;
+      color: #a0aec0;
+      margin-top: 4px;
+      letter-spacing: 0.5px;
+    }
+    .slot-filled {
+      border: 2px solid #2b6cb0;
+      background: #f0f4ff;
+      color: #2b6cb0;
+      box-shadow: 0 2px 8px rgba(43, 108, 176, 0.1);
+    }
+    .slot-filled-icon {
+      font-size: 22px;
+      margin-bottom: 2px;
+    }
+    .slot-filled-title {
+      font-size: 8px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      text-align: center;
+      max-width: 60px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .free-gift-card {
+      background: linear-gradient(135deg, #fffaf0 0%, #feebc8 100%);
+      border: 1px dashed #dd6b20;
+      border-radius: 12px;
+      padding: 12px;
+      margin-bottom: 16px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      animation: fadeIn 0.4s ease-out;
+    }
+    .free-gift-badge {
+      background: #dd6b20;
+      color: white;
+      font-size: 9px;
+      font-weight: bold;
+      padding: 2px 6px;
+      border-radius: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .free-gift-title {
+      font-size: 13px;
+      font-weight: bold;
+      color: #7b341e;
+    }
+    .free-gift-desc {
+      font-size: 11px;
+      color: #9c4221;
+      margin-top: 2px;
+    }
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(4px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
   </style>
   <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
@@ -1050,27 +1177,73 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
       }, [liveProducts]);
 
       if (!contract) {
-        // Calculate live, dynamic bundle totals and progress
-        const totalPrice = liveProducts
-          .filter(p => selectedVariants.includes(p.variantId))
-          .reduce((acc, p) => acc + p.price, 0);
+        // Calculate dynamic product quantities and bundle totals
+        const getProductQty = (vId) => selectedVariants.filter(id => id === vId).length;
 
-        const progressPercent = Math.min(100, Math.round((selectedVariants.length / Math.max(1, liveProducts.length)) * 100));
+        const totalPrice = selectedVariants.reduce((sum, vId) => {
+          const prod = liveProducts.find(p => p.variantId === vId);
+          return sum + (prod ? prod.price : 0);
+        }, 0);
+
+        const handleIncrement = (vId) => {
+          setSelectedVariants([...selectedVariants, vId]);
+        };
+
+        const handleDecrement = (vId) => {
+          const idx = selectedVariants.indexOf(vId);
+          if (idx > -1) {
+            const copy = [...selectedVariants];
+            copy.splice(idx, 1);
+            setSelectedVariants(copy);
+          }
+        };
+
+        const maxSlots = 3;
+        const slotsToRender = Array.from({ length: maxSlots });
+        const isFreeGiftUnlocked = selectedVariants.length >= 2;
 
         return e("div", null,
           e("div", { className: "header", style: { borderBottom: "none", marginBottom: "20px" } },
             e("h2", null, "✨ Design Your Skincare Routine"),
             e("p", null, "Build your custom daily box from our live catalog to unlock recurring discounts and the Glow Portal!")
           ),
+
+          // Visual Placeholder Slots (Like Poppin / Peak Fuel)
+          e("div", { style: { marginBottom: "20px", textAlign: "center" } },
+            e("div", { style: { fontSize: "11px", fontWeight: "700", color: "#718096", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "8px" } }, "Your Routine Box Progress"),
+            e("div", { className: "slot-container" },
+              slotsToRender.map((_, idx) => {
+                const vId = selectedVariants[idx];
+                if (vId) {
+                  const prod = liveProducts.find(p => p.variantId === vId);
+                  return e("div", { key: idx, className: "slot slot-filled" },
+                    e("div", { className: "slot-filled-icon" }, "🧴"),
+                    e("div", { className: "slot-filled-title" }, prod ? prod.productName.split(" Serum")[0].split(" Mask")[0] : "Product")
+                  );
+                } else {
+                  return e("div", { key: idx, className: "slot slot-empty" });
+                }
+              })
+            )
+          ),
+
+          // Dynamic Free Gift Unlock Showcase
+          isFreeGiftUnlocked && e("div", { className: "free-gift-card" },
+            e("div", { style: { fontSize: "28px" } }, "🎁"),
+            e("div", null,
+              e("span", { className: "free-gift-badge" }, "🎁 Included Free"),
+              e("div", { className: "free-gift-title" }, "Hydrating Aloe Deluxe Sample"),
+              e("div", { className: "free-gift-desc" }, "Automatically added to your recurring shipments at no extra cost.")
+            )
+          ),
           
           e("div", { className: "product-grid" },
             liveProducts.map((prod) => {
-              const isSelected = selectedVariants.includes(prod.variantId);
+              const qty = getProductQty(prod.variantId);
+              const isSelected = qty > 0;
               const toggleProduct = () => {
-                if (isSelected) {
-                  setSelectedVariants(selectedVariants.filter(id => id !== prod.variantId));
-                } else {
-                  setSelectedVariants([...selectedVariants, prod.variantId]);
+                if (!isSelected) {
+                  handleIncrement(prod.variantId);
                 }
               };
               return e("div", { 
@@ -1081,7 +1254,14 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
                 e("div", null,
                   e("div", { className: "badge-select" }, isSelected ? "✓" : ""),
                   e("div", { className: "card-subtitle" }, prod.variantTitle && prod.variantTitle !== "Default Title" ? prod.variantTitle : "Product"),
-                  e("div", { className: "card-title" }, prod.productName)
+                  e("div", { className: "card-title" }, prod.productName),
+                  
+                  // Pill Quantity incrementors (Like Bliss Chocolates)
+                  isSelected && e("div", { className: "quantity-selector", onClick: (ev) => ev.stopPropagation() },
+                    e("button", { className: "quantity-btn", onClick: () => handleDecrement(prod.variantId) }, "-"),
+                    e("span", { className: "quantity-count" }, qty),
+                    e("button", { className: "quantity-btn", onClick: () => handleIncrement(prod.variantId) }, "+")
+                  )
                 ),
                 e("div", { className: "price-tag" }, "$" + prod.price.toFixed(2))
               );
@@ -1103,9 +1283,6 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
 
           // Dynamic Sticky Value Footer
           e("div", { className: "sticky-footer" },
-            e("div", { className: "progress-bar-container" },
-              e("div", { className: "progress-bar-fill", style: { width: progressPercent + "%" } })
-            ),
             e("div", { className: "summary-row" },
               e("span", { className: "summary-text" }, 
                 selectedVariants.length === 0 ? "Choose your items" : 
@@ -1118,13 +1295,29 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
               disabled: selectedVariants.length === 0 || activating, 
               onClick: () => {
                 setActivating(true);
-                const itemsToCreate = liveProducts
-                  .filter(p => selectedVariants.includes(p.variantId))
-                  .map(p => ({
+                
+                // Get unique selected product records with their corresponding quantities
+                const uniqueSelectedIds = [...new Set(selectedVariants)];
+                const itemsToCreate = uniqueSelectedIds.map(vId => {
+                  const p = liveProducts.find(prod => prod.variantId === vId);
+                  return {
                     variantId: p.variantId,
                     productName: p.productName,
-                    price: p.price
-                  }));
+                    price: p.price,
+                    quantity: getProductQty(vId)
+                  };
+                });
+
+                if (isFreeGiftUnlocked) {
+                  itemsToCreate.push({
+                    variantId: "gid://shopify/ProductVariant/5003",
+                    productName: "Hydrating Aloe Deluxe Sample",
+                    price: 0.00,
+                    quantity: 1,
+                    isFreeGift: true
+                  });
+                }
+
                 fetch("/api/storefront/routine/create", {
                   method: "POST",
                   headers: { 
@@ -1134,7 +1327,7 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
                   },
                   body: JSON.stringify({ 
                     customerId: "${customerId}", 
-                    variantIds: selectedVariants, 
+                    variantIds: uniqueSelectedIds, 
                     frequencyDays: routineFrequency,
                     items: itemsToCreate
                   })
@@ -3677,17 +3870,54 @@ app.get("/", (req, res) => {
           }, 800);
         };
 
+        const getAdminProductQty = (vId) => adminSelectedVariants.filter(id => id === vId).length;
+
+        const handleAdminIncrement = (vId) => {
+          setAdminSelectedVariants([...adminSelectedVariants, vId]);
+        };
+
+        const handleAdminDecrement = (vId) => {
+          const idx = adminSelectedVariants.indexOf(vId);
+          if (idx > -1) {
+            const copy = [...adminSelectedVariants];
+            copy.splice(idx, 1);
+            setAdminSelectedVariants(copy);
+          }
+        };
+
         const activateContract = () => {
           const selectedProf = profiles.find(p => p.customerId === selectedPortalCustomerId);
+          const uniqueSelectedIds = [...new Set(adminSelectedVariants)];
+          
+          const itemsToCreate = uniqueSelectedIds.map(vId => {
+            const p = inventory.find(prod => prod.productId === vId);
+            return {
+              variantId: vId,
+              productName: p ? p.productName.split(" (")[0] : vId,
+              price: p ? p.price : 30.00,
+              quantity: getAdminProductQty(vId)
+            };
+          });
+
+          // If quantity >= 2, unlock free gift automatically for admin bootstrapped routine!
+          const isFreeGiftUnlocked = adminSelectedVariants.length >= 2;
+          if (isFreeGiftUnlocked) {
+            itemsToCreate.push({
+              variantId: "gid://shopify/ProductVariant/5003",
+              productName: "Hydrating Aloe Deluxe Sample",
+              price: 0.00,
+              quantity: 1,
+              isFreeGift: true
+            });
+          }
+
           fetch("/api/admin/subscription-contracts", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               customerId: selectedPortalCustomerId,
-              variantId: "gid://shopify/ProductVariant/5001",
-              productName: "Vitamin C Serum",
-              price: 30.00,
-              frequencyDays: 30
+              frequencyDays: adminFrequency,
+              items: itemsToCreate
             })
           })
           .then(res => res.json())
@@ -3735,13 +3965,98 @@ app.get("/", (req, res) => {
         }
 
         if (!portalContract) {
+          const totalPrice = adminSelectedVariants.reduce((sum, vId) => {
+            const prod = inventory.find(p => p.productId === vId);
+            return sum + (prod ? prod.price : 0);
+          }, 0);
+
+          const isFreeGiftUnlocked = adminSelectedVariants.length >= 2;
+
           return e("div", null,
             renderCustomerSelector(),
-            e("div", { className: "card", style: { textAlign: "center", padding: "40px" } },
-              e("div", { style: { fontSize: "40px", marginBottom: "12px" } }, "🔒"),
-              e("div", { style: { fontSize: "16px", fontWeight: "bold", color: "#2c3e50" } }, "No Active Subscription Contract Found"),
-              e("p", { style: { color: "#6d7175", fontSize: "13px", marginTop: "4px", marginBottom: "20px" } }, "This subscriber has profile preferences saved, but does not have an active subscription routine in the database yet."),
-              e("button", { className: "button-primary", onClick: activateContract }, "🚀 Create & Activate Glow Subscription Contract")
+            e("div", { className: "card", style: { padding: "20px" } },
+              e("div", { style: { marginBottom: "20px" } },
+                e("h3", { style: { fontSize: "15px", fontWeight: "bold", color: "#2c3e50", margin: "0 0 6px 0" } }, "🌟 Create Active Routine Subscription"),
+                e("p", { style: { color: "#6d7175", fontSize: "13px", margin: 0 } }, "Select routine items from the live catalog to manually bootstrap a customized subscription contract for this subscriber.")
+              ),
+
+              e("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: "12px", marginBottom: "20px" } },
+                inventory.map((prod) => {
+                  const qty = getAdminProductQty(prod.productId);
+                  const isSelected = qty > 0;
+                  const toggleProduct = () => {
+                    if (!isSelected) {
+                      handleAdminIncrement(prod.productId);
+                    }
+                  };
+                  return e("div", { 
+                    key: prod.productId, 
+                    onClick: toggleProduct,
+                    style: {
+                      background: isSelected ? "#f4f6f8" : "white",
+                      border: isSelected ? "2px solid #008060" : "1px solid #cbd5e0",
+                      borderRadius: "12px",
+                      padding: "12px",
+                      position: "relative",
+                      cursor: "pointer",
+                      transition: "all 0.2s",
+                      minHeight: "100px",
+                      display: "flex",
+                      flexDirection: "column",
+                      justifyContent: "space-between"
+                    }
+                  },
+                    e("div", { style: { position: "absolute", top: "8px", right: "8px", width: "18px", height: "18px", borderRadius: "50%", border: "1px solid #cbd5e0", background: isSelected ? "#008060" : "white", color: "white", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "10px", fontWeight: "bold" } }, isSelected ? "✓" : ""),
+                    e("div", null,
+                      e("div", { style: { fontSize: "10px", color: "#6d7175", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "4px" } }, "Catalog Item"),
+                      e("div", { style: { fontSize: "13px", fontWeight: "bold", color: "#2d3748", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", marginRight: "12px" } }, prod.productName ? prod.productName.split(" (")[0] : prod.productId),
+                      
+                      // Pill quantity controls inside admin builder!
+                      isSelected && e("div", { style: { display: "inline-flex", alignItems: "center", background: "#f1f3f5", borderRadius: "20px", padding: "2px 4px", gap: "6px", border: "1px solid #cbd5e0", marginTop: "6px" }, onClick: (ev) => ev.stopPropagation() },
+                        e("button", { style: { width: "20px", height: "20px", borderRadius: "50%", border: "none", background: "white", color: "#008060", fontWeight: "bold", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "12px", padding: 0 }, onClick: () => handleAdminDecrement(prod.productId) }, "-"),
+                        e("span", { style: { fontSize: "12px", fontWeight: "bold", minWidth: "12px", textCent: "center" } }, qty),
+                        e("button", { style: { width: "20px", height: "20px", borderRadius: "50%", border: "none", background: "white", color: "#008060", fontWeight: "bold", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "12px", padding: 0 }, onClick: () => handleAdminIncrement(prod.productId) }, "+")
+                      )
+                    ),
+                    e("div", { style: { fontSize: "13px", fontWeight: "700", color: "#008060", marginTop: "8px" } }, "$" + prod.price.toFixed(2))
+                  );
+                })
+              ),
+
+              isFreeGiftUnlocked && e("div", { style: { background: "linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%)", border: "1px dashed #008060", borderRadius: "12px", padding: "12px", marginBottom: "16px", display: "flex", alignItems: "center", gap: "12px" } },
+                e("div", { style: { fontSize: "28px" } }, "🎁"),
+                e("div", null,
+                  e("span", { style: { background: "#008060", color: "white", fontSize: "9px", fontWeight: "bold", padding: "2px 6px", borderRadius: "10px", textTransform: "uppercase", letterSpacing: "0.5px" } }, "🎁 Included Free"),
+                  e("div", { style: { fontSize: "13px", fontWeight: "bold", color: "#14532d" } }, "Hydrating Aloe Deluxe Sample"),
+                  e("div", { style: { fontSize: "11px", color: "#166534", marginTop: "2px" } }, "Milestone reached! Gift sample dynamically active on unboxing shipments.")
+                )
+              ),
+
+              e("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: "16px", backgroundColor: "#f6f6f7", padding: "12px 16px", borderRadius: "8px", border: "1px solid #cbd5e0", marginBottom: "16px" } },
+                e("div", { style: { flex: 1 } },
+                  e("label", { style: { display: "block", fontSize: "10px", fontWeight: "bold", color: "#6d7175", textTransform: "uppercase", marginBottom: "4px" } }, "Billing Cycle Interval"),
+                  e("select", { 
+                    value: adminFrequency, 
+                    onChange: (ev) => setAdminFrequency(parseInt(ev.target.value)),
+                    style: { width: "100%", padding: "8px", borderRadius: "6px", border: "1px solid #cbd5e0", fontSize: "13px", outline: "none", cursor: "pointer", background: "white" }
+                  },
+                    e("option", { value: 15 }, "Deliver Every 15 Days"),
+                    e("option", { value: 30 }, "Deliver Every 30 Days (Standard)"),
+                    e("option", { value: 45 }, "Deliver Every 45 Days")
+                  )
+                ),
+                e("div", { style: { textAlign: "right" } },
+                  e("div", { style: { fontSize: "10px", fontWeight: "bold", color: "#6d7175", textTransform: "uppercase", marginBottom: "4px" } }, "Contract Total Price"),
+                  e("div", { style: { fontSize: "18px", fontWeight: "800", color: "#2c3e50" } }, "$" + totalPrice.toFixed(2))
+                )
+              ),
+
+              e("button", { 
+                className: "button-primary", 
+                disabled: adminSelectedVariants.length === 0, 
+                onClick: activateContract,
+                style: { width: "100%", padding: "12px", fontWeight: "bold", borderRadius: "6px", display: "flex", alignItems: "center", justifyContent: "center" }
+              }, "🚀 Create & Activate Custom Glow Subscription Contract")
             )
           );
         }
