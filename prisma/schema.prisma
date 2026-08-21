@@ -32,6 +32,8 @@ model Session {
   boxPriceMedium      Float     @default(60.0)
   boxPriceHigh        Float     @default(120.0)
   targetMargin        Float     @default(55.0)
+  milestoneOrderCount Int       @default(3)
+  giftVariantIds      String    @default("[]")
 }
 
 model CustomerProfile {
@@ -138,4 +140,32 @@ model Referral {
   createdAt         DateTime        @default(now())
 
   @@index([referrerId])
+}
+
+model SubscriptionContract {
+  id              String   @id // Shopify Subscription Contract GID
+  shop            String
+  customerId      String   // Shopify Customer GID
+  status          String   // ACTIVE, PAUSED, CANCELLED
+  nextBillDate    DateTime
+  frequencyDays   Int      @default(30)
+  items           String   @default("[]") // JSON string of subscription items
+  ordersCompleted Int      @default(0)    // Tracks milestone completion
+  abSegment       String   @default("A")  // For split tests (e.g. "A" / "B")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+model AbExperiment {
+  id         String   @id @default(uuid())
+  shop       String
+  name       String   // e.g. "Dry Skin Cancel Test"
+  treatmentA String   // e.g. "FREE_GIFT"
+  treatmentB String   // e.g. "PERCENT_DISCOUNT"
+  savesA     Int      @default(0)
+  savesB     Int      @default(0)
+  cancelsA   Int      @default(0)
+  cancelsB   Int      @default(0)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
 }

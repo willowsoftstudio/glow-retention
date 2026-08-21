@@ -1,5 +1,5 @@
 import { shopifyApp } from "@shopify/shopify-app-express";
-import { LATEST_API_VERSION, Session } from "@shopify/shopify-api";
+import { LATEST_API_VERSION, Session, BillingInterval } from "@shopify/shopify-api";
 import { SessionStorage } from "@shopify/shopify-app-session-storage";
 import { PrismaClient } from "./prisma-client/index.js";
 
@@ -122,11 +122,24 @@ export const shopify = shopifyApp({
       "read_validations",
       "read_orders"
     ],
-    hostName: process.env.HOST 
-      ? process.env.HOST.replace(/https?:\/\//, "") 
+    hostName: process.env.HOST
+      ? process.env.HOST.replace(/https?:\/\//, "")
       : (process.env.VERCEL_URL ? process.env.VERCEL_URL : "localhost:3002"),
     restResources: undefined,
-    billing: undefined
+    billing: {
+      "PRO": {
+        amount: 99.00,
+        currencyCode: "USD",
+        interval: BillingInterval.Every30Days,
+        trialDays: 14,
+      },
+      "ENTERPRISE": {
+        amount: 499.00,
+        currencyCode: "USD",
+        interval: BillingInterval.Every30Days,
+        trialDays: 30,
+      }
+    }
   },
   auth: {
     path: "/api/auth",

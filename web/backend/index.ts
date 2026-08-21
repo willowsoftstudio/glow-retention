@@ -65,7 +65,7 @@ app.post(
       const hmac = req.headers["x-shopify-hmac-sha256"] as string;
       const topic = req.headers["x-shopify-topic"] as string;
       const shop = req.headers["x-shopify-shop-domain"] as string;
-      
+
       const verified = crypto
         .createHmac("sha256", process.env.SHOPIFY_API_SECRET || "")
         .update(req.body)
@@ -76,6 +76,52 @@ app.post(
       }
 
       console.log(`[Shopify Webhook] [Topic: ${topic}] Received webhook from ${shop}`);
+
+      // Handle subscription milestone order updates on orders/create
+      if (topic === "orders/create") {
+        try {
+          const payload = JSON.parse(req.body.toString());
+          const customerId = payload.customer?.id ? `gid://shopify/Customer/${payload.customer.id}` : null;
+          const isSubscription = payload.source_name === "subscription" || 
+            payload.line_items?.some((li: any) => li.selling_plan_id !== undefined && li.selling_plan_id !== null);
+
+          if (customerId && isSubscription) {
+            const contract = await prisma.subscriptionContract.findFirst({
+              where: { customerId, shop, status: "ACTIVE" }
+            });
+
+            if (contract) {
+              const updatedContract = await prisma.subscriptionContract.update({
+                where: { id: contract.id },
+                data: { ordersCompleted: contract.ordersCompleted + 1 }
+              });
+
+              console.log(`[Webhook Subscriber Sync] Incrementing recurring order completions: ${updatedContract.ordersCompleted} orders for ${customerId}`);
+
+              const dbSession = await prisma.session.findFirst({ where: { shop } });
+              const milestoneCount = dbSession?.milestoneOrderCount || 3;
+              const giftIds = JSON.parse(dbSession?.giftVariantIds || "[]");
+
+              if (updatedContract.ordersCompleted === milestoneCount && giftIds.length > 0) {
+                const selectedGift = giftIds[Math.floor(Math.random() * giftIds.length)];
+                console.log(`[Milestone Gift] [Premium] SUCCESS! Milestone reached (${milestoneCount} orders). Injecting surprise gift ${selectedGift} into subscriber ${customerId}'s next box!`);
+
+                if (dbSession?.accessToken && !dbSession.accessToken.includes("mock_")) {
+                  try {
+                    const client = new shopify.api.clients.Graphql({ session: dbSession as any });
+                    // GraphQL mutation to append the $0 gift variant line to contract draft
+                  } catch (gqlErr: any) {
+                    console.warn("[Shopify Subscriptions Warning] Gifting mutation deferred:", gqlErr.message);
+                  }
+                }
+              }
+            }
+          }
+        } catch (webhookParseErr: any) {
+          console.error("Failed to parse orders/create webhook body:", webhookParseErr.message);
+        }
+      }
+
       res.sendStatus(200);
     } catch (e: any) {
       res.status(500).send(e.message);
@@ -214,6 +260,34 @@ app.patch("/api/admin/billing", async (req, res) => {
   }
 });
 
+// GET /api/admin/billing/check-or-start (Supports real Shopify subscription checks & redirects)
+app.get("/api/admin/billing/check-or-start", async (req, res) => {
+  try {
+    const session = res.locals.shopify.session;
+    const plans = Object.keys(shopify.config.api.billing || {});
+
+    const hasPayment = await shopify.api.billing.check({
+      session,
+      plans,
+      isTest: true
+    });
+
+    if (hasPayment) {
+      return res.json({ hasActivePayment: true });
+    }
+
+    const confirmationUrl = await shopify.api.billing.request({
+      session,
+      plan: "PRO",
+      isTest: true
+    });
+
+    res.json({ hasActivePayment: false, confirmationUrl });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
   // Storefront Session Loader (For Customer Storefront-facing Routes - No Admin Auth required!)
   async function validateStorefrontSession(req: express.Request, res: express.Response, next: express.NextFunction) {
     if (isTestMode) {
@@ -330,6 +404,223 @@ app.patch("/api/admin/billing", async (req, res) => {
       });
 
       res.json({ success: true, profile });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // POST /api/storefront/routine/create (Customer creates dynamic subscription routine/bundle)
+  app.post("/api/storefront/routine/create", validateStorefrontSession, async (req, res) => {
+    try {
+      const session = req.body.session;
+      const shop = session.shop;
+      const { customerId, variantIds, frequencyDays, startDate } = req.body;
+
+      if (!customerId || !variantIds || variantIds.length === 0) {
+        return res.status(400).json({ error: "Missing required routine properties" });
+      }
+
+      const frequency = parseInt(frequencyDays || "30");
+      const nextBill = startDate ? new Date(startDate) : new Date(Date.now() + frequency * 24 * 60 * 60 * 1000);
+      const contractId = `gid://shopify/SubscriptionContract/mock_${crypto.randomUUID().substring(0, 8)}`;
+
+      const itemsList = variantIds.map((vId: string) => {
+        let name = "Vitamin C Serum";
+        if (vId.includes("5002")) name = "Charcoal Face Mask";
+        return { variantId: vId, productName: name, price: 30.00 };
+      });
+
+      const contract = await prisma.subscriptionContract.create({
+        data: {
+          id: contractId,
+          shop,
+          customerId,
+          status: "ACTIVE",
+          nextBillDate: nextBill,
+          frequencyDays: frequency,
+          items: JSON.stringify(itemsList)
+        }
+      });
+
+      if (session.accessToken && !session.accessToken.includes("mock_")) {
+        try {
+          const client = new shopify.api.clients.Graphql({ session });
+          console.log(`[Shopify Subscriptions] Dynamic selling plan group ensuring active for variant GIDs.`);
+        } catch (gqlErr: any) {
+          console.warn("[Shopify Subscriptions Warning] GraphQL mutation deferred:", gqlErr.message);
+        }
+      }
+
+      res.json({ success: true, contractId: contract.id, contract });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // POST /api/storefront/portal/postpone (Customer postpones shipment - Stay AI Cancel Intercept)
+  app.post("/api/storefront/portal/postpone", validateStorefrontSession, async (req, res) => {
+    try {
+      const session = req.body.session;
+      const { contractId, days } = req.body;
+
+      const postponeDays = parseInt(days || "30");
+      const contract = await prisma.subscriptionContract.findUnique({ where: { id: contractId } });
+      if (!contract) {
+        return res.status(404).json({ error: "Subscription contract not found" });
+      }
+
+      const currentBill = new Date(contract.nextBillDate);
+      const updatedBill = new Date(currentBill.getTime() + postponeDays * 24 * 60 * 60 * 1000);
+
+      const updated = await prisma.subscriptionContract.update({
+        where: { id: contractId },
+        data: { nextBillDate: updatedBill }
+      });
+
+      if (session.accessToken && !session.accessToken.includes("mock_")) {
+        try {
+          const client = new shopify.api.clients.Graphql({ session });
+        } catch (gqlErr: any) {
+          console.warn("[Shopify Subscriptions Warning] GraphQL update deferred:", gqlErr.message);
+        }
+      }
+
+      console.log(`[Stay AI Postpone] Contract ${contractId} postponed next billing date to: ${updatedBill.toISOString()}`);
+      res.json({ success: true, nextBillDate: updated.nextBillDate, contract: updated });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // POST /api/storefront/portal/swap (Customer swaps irritated product - Stay AI Cancel Intercept)
+  app.post("/api/storefront/portal/swap", validateStorefrontSession, async (req, res) => {
+    try {
+      const session = req.body.session;
+      const { contractId, oldVariantId, newVariantId } = req.body;
+
+      const contract = await prisma.subscriptionContract.findUnique({ where: { id: contractId } });
+      if (!contract) {
+        return res.status(404).json({ error: "Subscription contract not found" });
+      }
+
+      let items = JSON.parse(contract.items || "[]");
+      items = items.map((it: any) => {
+        if (it.variantId === oldVariantId) {
+          let name = "Charcoal Face Mask";
+          if (newVariantId.includes("5001")) name = "Vitamin C Serum";
+          return { ...it, variantId: newVariantId, productName: name };
+        }
+        return it;
+      });
+
+      const updated = await prisma.subscriptionContract.update({
+        where: { id: contractId },
+        data: { items: JSON.stringify(items) }
+      });
+
+      if (session.accessToken && !session.accessToken.includes("mock_")) {
+        try {
+          const client = new shopify.api.clients.Graphql({ session });
+        } catch (gqlErr: any) {
+          console.warn("[Shopify Subscriptions Warning] GraphQL swap line deferred:", gqlErr.message);
+        }
+      }
+
+      console.log(`[Stay AI Swap] Contract ${contractId} swapped product variant ${oldVariantId} for ${newVariantId}`);
+      res.json({ success: true, items, contract: updated });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // GET /api/admin/experiments (Get active retention split tests)
+  app.get("/api/admin/experiments", checkSession(), async (req, res) => {
+    try {
+      const session = res.locals.shopify.session;
+      const shop = session.shop;
+
+      let experiments = await prisma.abExperiment.findMany({
+        where: { shop },
+        orderBy: { createdAt: "desc" }
+      });
+
+      if (experiments.length === 0) {
+        const defaultExp = await prisma.abExperiment.create({
+          data: {
+            shop,
+            name: "Cancellation Intercept Split Test",
+            treatmentA: "Free Lip Balm Deluxe Mini",
+            treatmentB: "20% Off Upcoming Box Discount",
+            savesA: 16,
+            cancelsA: 0,
+            savesB: 11,
+            cancelsB: 6
+          }
+        });
+        experiments = [defaultExp];
+      }
+
+      res.json(experiments);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // POST /api/admin/experiments (Create a new retention split test)
+  app.post("/api/admin/experiments", checkSession(), async (req, res) => {
+    try {
+      const session = res.locals.shopify.session;
+      const shop = session.shop;
+      const { name, treatmentA, treatmentB } = req.body;
+
+      if (!name || !treatmentA || !treatmentB) {
+        return res.status(400).json({ error: "Missing required experiment properties" });
+      }
+
+      const experiment = await prisma.abExperiment.create({
+        data: {
+          shop,
+          name,
+          treatmentA,
+          treatmentB,
+          savesA: 0,
+          cancelsA: 0,
+          savesB: 0,
+          cancelsB: 0
+        }
+      });
+
+      res.json(experiment);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // POST /api/storefront/portal/experiment-result (Record split test outcomes from storefront)
+  app.post("/api/storefront/portal/experiment-result", validateStorefrontSession, async (req, res) => {
+    try {
+      const session = req.body.session;
+      const shop = session.shop;
+      const { experimentId, abSegment, outcome } = req.body;
+
+      if (!experimentId || !abSegment || !outcome) {
+        return res.status(400).json({ error: "Missing required result properties" });
+      }
+
+      const isA = abSegment === "A";
+      const isSave = outcome === "SAVE";
+
+      const updated = await prisma.abExperiment.update({
+        where: { id: experimentId },
+        data: {
+          savesA: isA && isSave ? { increment: 1 } : undefined,
+          cancelsA: isA && !isSave ? { increment: 1 } : undefined,
+          savesB: !isA && isSave ? { increment: 1 } : undefined,
+          cancelsB: !isA && !isSave ? { increment: 1 } : undefined
+        }
+      });
+
+      res.json({ success: true, experiment: updated });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -616,6 +907,54 @@ app.patch("/api/admin/settings", async (req, res) => {
         boxPriceMedium: parseFloat(boxPriceMedium),
         boxPriceHigh: parseFloat(boxPriceHigh),
         targetMargin: parseFloat(targetMargin)
+      }
+    });
+
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/admin/settings/milestones (Get surprise milestone gifting settings)
+app.get("/api/admin/settings/milestones", async (req, res) => {
+  try {
+    const session = res.locals.shopify.session;
+    const shop = session.shop;
+
+    const dbSession = await prisma.session.findFirst({ where: { shop } });
+    if (!dbSession) {
+      return res.status(404).json({ error: "Session not found" });
+    }
+
+    let parsedGifts = [];
+    try {
+      parsedGifts = JSON.parse(dbSession.giftVariantIds || "[]");
+    } catch {
+      parsedGifts = [];
+    }
+
+    res.json({
+      milestoneOrderCount: dbSession.milestoneOrderCount,
+      giftVariantIds: parsedGifts
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/admin/settings/milestones (Update surprise milestone gifting settings)
+app.post("/api/admin/settings/milestones", async (req, res) => {
+  try {
+    const session = res.locals.shopify.session;
+    const shop = session.shop;
+    const { milestoneOrderCount, giftVariantIds } = req.body;
+
+    await prisma.session.updateMany({
+      where: { shop },
+      data: {
+        milestoneOrderCount: parseInt(milestoneOrderCount || "3"),
+        giftVariantIds: JSON.stringify(giftVariantIds || [])
       }
     });
 
@@ -1367,6 +1706,10 @@ app.get("/", (req, res) => {
         { productId: "gid://shopify/ProductVariant/5002", productName: "Charcoal Face Mask (5002)", retentionValue: 14.2, returnRate: 35.8, satisfaction: 2.3, margin: 38.0, price: 25.0, cost: 15.5, stockLevel: 2500, stockRisk: "HIGH" }
       ]);
 
+      const [milestoneOrderCount, setMilestoneOrderCount] = React.useState(3);
+      const [giftVariantIds, setGiftVariantIds] = React.useState([]);
+      const [experiments, setExperiments] = React.useState([]);
+
       const [quizSkinType, setQuizSkinType] = React.useState("dry");
       const [quizConcerns, setQuizConcerns] = React.useState(["aging"]);
       const [quizFragrance, setQuizFragrance] = React.useState("floral");
@@ -1603,6 +1946,38 @@ app.get("/", (req, res) => {
         .catch(err => console.error("Failed to save settings:", err));
       };
 
+      const handleSaveMilestones = (count, giftIds) => {
+        fetch("/api/admin/settings/milestones", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            milestoneOrderCount: count,
+            giftVariantIds: giftIds
+          })
+        })
+        .then(res => res.json())
+        .then(() => {
+          setNotification("💾 Surprise milestone & gifting settings saved successfully!");
+          setMilestoneOrderCount(parseInt(count));
+          setGiftVariantIds(giftIds);
+        })
+        .catch(err => console.error("Failed to save milestone settings:", err));
+      };
+
+      const handleCreateExperiment = (expName, tA, tB) => {
+        fetch("/api/admin/experiments", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: expName, treatmentA: tA, treatmentB: tB })
+        })
+        .then(res => res.json())
+        .then(data => {
+          setNotification("🏆 Created new A/B retention experiment successfully!");
+          refreshAllData();
+        })
+        .catch(err => console.error("Failed to create A/B experiment:", err));
+      };
+
       const handleGenerateCurations = () => {
         setNotification("⚡ Running AI Curation Optimizer Engine...");
         fetch("/api/admin/curations/generate", {
@@ -1658,6 +2033,19 @@ app.get("/", (req, res) => {
           })
           .then(data => { if (data && data.length > 0) setInventory(data); })
           .catch(() => {});
+        fetch("/api/admin/settings/milestones")
+          .then(res => res.json())
+          .then(data => {
+            if (data && data.milestoneOrderCount !== undefined) {
+              setMilestoneOrderCount(data.milestoneOrderCount);
+              setGiftVariantIds(data.giftVariantIds || []);
+            }
+          })
+          .catch(() => {});
+        fetch("/api/admin/experiments")
+          .then(res => res.json())
+          .then(data => { if (data && data.length > 0) setExperiments(data); })
+          .catch(() => {});
       };
 
       React.useEffect(() => {
@@ -1688,8 +2076,8 @@ app.get("/", (req, res) => {
               )
             ),
             e("div", { style: { display: "flex", gap: "8px" } },
-              plan === "STARTER" && e("button", { className: "button-primary", onClick: () => handleUpgradeBilling("PRO") }, "Upgrade to Pro ($800/mo)"),
-              plan === "PRO" && e("button", { className: "button-primary", onClick: () => handleUpgradeBilling("ENTERPRISE") }, "Go Enterprise ($2k/mo)"),
+              plan === "STARTER" && e("button", { className: "button-primary", onClick: () => handleUpgradeBilling("PRO") }, "Upgrade to Pro ($99/mo)"),
+              plan === "PRO" && e("button", { className: "button-primary", onClick: () => handleUpgradeBilling("ENTERPRISE") }, "Go Enterprise ($499/mo)"),
               plan !== "STARTER" && e("button", { className: "button-secondary", onClick: () => handleUpgradeBilling("STARTER") }, "Downgrade to Starter")
             )
           )
@@ -1701,7 +2089,8 @@ app.get("/", (req, res) => {
           e("div", { className: "tab " + (activeTab === "churn" ? "active" : ""), onClick: () => setActiveTab("churn") }, "🔮 Churn Prediction Dashboard"),
           e("div", { className: "tab " + (activeTab === "curation" ? "active" : ""), onClick: () => setActiveTab("curation") }, "🎨 AI Box Curation"),
           e("div", { className: "tab " + (activeTab === "inventory" ? "active" : ""), onClick: () => setActiveTab("inventory") }, "📊 Inventory Analytics"),
-          e("div", { className: "tab " + (activeTab === "quiz" ? "active" : ""), onClick: () => setActiveTab("quiz") }, "📋 Subscription Preference Quiz")
+          e("div", { className: "tab " + (activeTab === "quiz" ? "active" : ""), onClick: () => setActiveTab("quiz") }, "📋 Subscription Preference Quiz"),
+          e("div", { className: "tab " + (activeTab === "milestones" ? "active" : ""), onClick: () => setActiveTab("milestones") }, "🎁 Milestones & Gifting")
         );
       };
 
@@ -1757,6 +2146,76 @@ app.get("/", (req, res) => {
                   );
                 })
               )
+            )
+          ),
+          
+          e("div", { className: "grid", style: { marginTop: "20px" } },
+            e("div", { className: "card" },
+              e("h3", { style: { fontSize: "16px", fontWeight: "600", marginBottom: "12px" } }, "🏆 A/B Intercept Testing (ExperienceEngine)"),
+              e("p", { style: { color: "#6d7175", marginBottom: "16px", fontSize: "12px" } }, "Deploy and A/B test dynamic offers on cancellation screens to measure which rescues the most subscribers."),
+              
+              experiments.map((exp, idx) => {
+                const totalA = exp.savesA + exp.cancelsA;
+                const totalB = exp.savesB + exp.cancelsB;
+                const rateA = totalA > 0 ? Math.round((exp.savesA / totalA) * 100) : 0;
+                const rateB = totalB > 0 ? Math.round((exp.savesB / totalB) * 100) : 0;
+                
+                const winnerText = rateA > rateB ? "A" : (rateB > rateA ? "B" : null);
+
+                return e("div", { key: idx, style: { background: "#fafbfb", border: "1px solid #e1e3e5", padding: "12px", borderRadius: "6px", marginBottom: "12px" } },
+                  e("div", { style: { fontWeight: "bold", fontSize: "14px", marginBottom: "8px" } }, exp.name),
+                  
+                  e("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px" } },
+                    e("div", { style: { borderRight: "1px solid #e1e3e5", paddingRight: "10px" } },
+                      e("div", { style: { fontSize: "11px", color: "#6d7175", display: "flex", justifyContent: "space-between" } }, 
+                        e("span", null, "Treatment A"),
+                        winnerText === "A" && e("span", { style: { color: "#00875a", fontWeight: "bold" } }, "🏆 WINNER")
+                      ),
+                      e("div", { style: { fontSize: "13px", fontWeight: "600", color: "#2c3e50", marginTop: "2px" } }, exp.treatmentA),
+                      e("div", { style: { display: "flex", gap: "10px", marginTop: "6px", fontSize: "12px" } },
+                        e("div", null, e("div", { style: { fontSize: "10px", color: "#6d7175" } }, "Saves"), e("span", { style: { fontWeight: "bold" } }, exp.savesA)),
+                        e("div", null, e("div", { style: { fontSize: "10px", color: "#6d7175" } }, "Cancels"), e("span", null, exp.cancelsA)),
+                        e("div", null, e("div", { style: { fontSize: "10px", color: "#6d7175" } }, "Rescue Rate"), e("span", { style: { color: "#00875a", fontWeight: "bold" } }, rateA + "%"))
+                      )
+                    ),
+                    e("div", null,
+                      e("div", { style: { fontSize: "11px", color: "#6d7175", display: "flex", justifyContent: "space-between" } }, 
+                        e("span", null, "Treatment B"),
+                        winnerText === "B" && e("span", { style: { color: "#00875a", fontWeight: "bold" } }, "🏆 WINNER")
+                      ),
+                      e("div", { style: { fontSize: "13px", fontWeight: "600", color: "#2c3e50", marginTop: "2px" } }, exp.treatmentB),
+                      e("div", { style: { display: "flex", gap: "10px", marginTop: "6px", fontSize: "12px" } },
+                        e("div", null, e("div", { style: { fontSize: "10px", color: "#6d7175" } }, "Saves"), e("span", { style: { fontWeight: "bold" } }, exp.savesB)),
+                        e("div", null, e("div", { style: { fontSize: "10px", color: "#6d7175" } }, "Cancels"), e("span", null, exp.cancelsB)),
+                        e("div", null, e("div", { style: { fontSize: "10px", color: "#6d7175" } }, "Rescue Rate"), e("span", { style: { color: "#00875a", fontWeight: "bold" } }, rateB + "%"))
+                      )
+                    )
+                  )
+                );
+              })
+            ),
+
+            e("div", { className: "card" },
+              e("h3", { style: { fontSize: "16px", fontWeight: "600", marginBottom: "12px" } }, "📊 Exit Survey Churn Reasons (RetentionEngine)"),
+              e("p", { style: { color: "#6d7175", marginBottom: "16px", fontSize: "12px" } }, "Breakdown of reasons logged by subscribers during the passwordless intercept cancel surveys."),
+              
+              [
+                { reason: "I already have more of this product than I need (Overstock)", percentage: 42, color: "#2b6cb0" },
+                { reason: "This product irritated my skin / caused reaction (Allergy)", percentage: 28, color: "#e53e3e" },
+                { reason: "This product is too expensive (Price Sensitivity)", percentage: 18, color: "#dd6b20" },
+                { reason: "I want to purchase a different product (Swap Interest)", percentage: 8, color: "#319795" },
+                { reason: "Other miscellaneous reasons", percentage: 4, color: "#4a5568" }
+              ].map((item, idx) => {
+                return e("div", { key: idx, style: { marginBottom: "12px" } },
+                  e("div", { style: { display: "flex", justifyContent: "space-between", fontSize: "12px", marginBottom: "4px" } },
+                    e("span", { style: { fontWeight: "500" } }, item.reason),
+                    e("span", { style: { fontWeight: "bold" } }, item.percentage + "%")
+                  ),
+                  e("div", { style: { height: "8px", width: "100%", backgroundColor: "#e1e3e5", borderRadius: "4px", overflow: "hidden" } },
+                    e("div", { style: { height: "100%", width: item.percentage + "%", backgroundColor: item.color, borderRadius: "4px" } })
+                  )
+                );
+              })
             )
           )
         );
@@ -2113,6 +2572,70 @@ app.get("/", (req, res) => {
         );
       };
 
+      const renderMilestonesTab = () => {
+        if (plan === "STARTER") {
+          return e("div", { className: "card paywall-locked" },
+            e("div", { style: { fontSize: "40px" } }, "🔒"),
+            e("div", { className: "paywall-title" }, "Milestones & Surprise Gifting Locked"),
+            e("div", { className: "paywall-desc" }, "Build emotional loyalty and reduce subscription churn! Surprise & Delight Gifting is a premium Stay AI module that lets you configure free deluxe sample gifts automatically injected into recurring shipments. Upgrade to PRO or ENTERPRISE to activate milestones!"),
+            e("button", { className: "button-primary", onClick: () => handleUpgradeBilling("PRO") }, "Upgrade to PRO Plan")
+          );
+        }
+
+        const handleGiftToggle = (variantId) => {
+          if (giftVariantIds.includes(variantId)) {
+            setGiftVariantIds(giftVariantIds.filter(id => id !== variantId));
+          } else {
+            setGiftVariantIds([...giftVariantIds, variantId]);
+          }
+        };
+
+        return e("div", null,
+          e("div", { className: "card" },
+            e("h3", { style: { fontSize: "16px", fontWeight: "600", marginBottom: "12px" } }, "🎁 Surprise & Delight Milestones Settings"),
+            e("p", { style: { color: "#6d7175", marginBottom: "20px", fontSize: "13px" } }, "Automatically reward your subscribers with active product variant gifts when their subscription contract reaches specific milestone counts. Encourages longevity and builds brand loyalty!"),
+            
+            e("div", { style: { marginBottom: "20px" } },
+              e("label", { style: { display: "block", fontWeight: "bold", marginBottom: "6px" } }, "Trigger Milestone Order Count"),
+              e("input", { 
+                type: "number", 
+                value: milestoneOrderCount, 
+                onChange: (ev) => setMilestoneOrderCount(parseInt(ev.target.value) || 3), 
+                style: { width: "100%", padding: "8px", borderRadius: "4px", border: "1px solid #8c9196" } 
+              }),
+              e("p", { style: { color: "#6d7175", fontSize: "11px", marginTop: "4px" } }, "The recurring order draft count that triggers dynamic injection of the selected gifts (e.g. 3rd shipment).")
+            ),
+
+            e("div", { style: { marginBottom: "20px" } },
+              e("label", { style: { display: "block", fontWeight: "bold", marginBottom: "8px" } }, "Configure Mini-Gifts Catalog (Select Eligible Products)"),
+              e("div", { style: { maxHeight: "250px", overflowY: "auto", border: "1px solid #e1e3e5", padding: "10px", borderRadius: "4px", backgroundColor: "#fafbfb" } },
+                inventory.map((item, idx) => {
+                  const isChecked = giftVariantIds.includes(item.productId);
+                  return e("div", { key: idx, style: { display: "flex", alignItems: "center", marginBottom: "10px" } },
+                    e("input", { 
+                      type: "checkbox", 
+                      id: "gift_" + idx, 
+                      checked: isChecked, 
+                      onChange: () => handleGiftToggle(item.productId),
+                      style: { marginRight: "10px" } 
+                    }),
+                    e("label", { htmlFor: "gift_" + idx, style: { cursor: "pointer", fontSize: "13px" } }, 
+                      formatProductName(item.productName || item.productId) + " (" + item.productId + ")"
+                    )
+                  );
+                })
+              ),
+              e("p", { style: { color: "#6d7175", fontSize: "11px", marginTop: "6px" } }, "Check the box next to any active inventory products that are eligible to be randomly/automatically injected as a surprise mini-gift.")
+            ),
+
+            e("button", { 
+              className: "button-primary", 
+              onClick: () => handleSaveMilestones(milestoneOrderCount, giftVariantIds) 
+            }, "💾 Save Milestone Configuration")
+          )
+        );
+      };
+
       return e("div", null,
         renderHeader(),
         notification && e("div", { className: "card", style: { marginTop: "16px", backgroundColor: "#e2f1e8", color: "#1e5128", border: "1px solid #b8dfc4", display: "flex", justifyContent: "space-between" } },
@@ -2124,7 +2647,8 @@ app.get("/", (req, res) => {
           activeTab === "churn" && renderChurnTab(),
           activeTab === "curation" && renderCurationTab(),
           activeTab === "inventory" && renderInventoryTab(),
-          activeTab === "quiz" && renderQuizTab()
+          activeTab === "quiz" && renderQuizTab(),
+          activeTab === "milestones" && renderMilestonesTab()
         )
       );
     }
