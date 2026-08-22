@@ -1017,7 +1017,10 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
           "gid://shopify/ProductVariant/5001",
           "gid://shopify/ProductVariant/5002",
           "gid://shopify/ProductVariant/5003"
-        ] // approved subscription add-ons by default
+        ], // approved subscription add-ons by default
+        tier1Discount: 15,
+        tier2Discount: 20,
+        tier3Discount: 25
       };
 
       if (fs.existsSync(configPath)) {
@@ -1041,7 +1044,7 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
   // POST /api/admin/theme-settings (Update theme colors and branding settings)
   app.post("/api/admin/theme-settings", async (req, res) => {
     try {
-      const { shop, themePrimaryColor, themeSecondaryColor, maxAddonLimit, minStartDateDays, eligibleAddonVariantIds } = req.body;
+      const { shop, themePrimaryColor, themeSecondaryColor, maxAddonLimit, minStartDateDays, eligibleAddonVariantIds, tier1Discount, tier2Discount, tier3Discount } = req.body;
       if (!shop) {
         return res.status(400).json({ error: "Missing required shop parameter" });
       }
@@ -1071,7 +1074,10 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
         themeSecondaryColor: themeSecondaryColor || allConfigs[shop]?.themeSecondaryColor || "#1a365d",
         maxAddonLimit: maxAddonLimit !== undefined ? parseInt(maxAddonLimit) : existingLimit,
         minStartDateDays: minStartDateDays !== undefined ? parseInt(minStartDateDays) : existingMinDate,
-        eligibleAddonVariantIds: eligibleAddonVariantIds || existingAddons
+        eligibleAddonVariantIds: eligibleAddonVariantIds || existingAddons,
+        tier1Discount: tier1Discount !== undefined ? parseInt(tier1Discount) : (allConfigs[shop]?.tier1Discount || 15),
+        tier2Discount: tier2Discount !== undefined ? parseInt(tier2Discount) : (allConfigs[shop]?.tier2Discount || 20),
+        tier3Discount: tier3Discount !== undefined ? parseInt(tier3Discount) : (allConfigs[shop]?.tier3Discount || 25)
       };
 
       fs.writeFileSync(configPath, JSON.stringify(allConfigs, null, 2), "utf-8");
@@ -1189,11 +1195,14 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
       let themePrimaryColor = "#b89047"; // premium luxury gold by default
       let themeSecondaryColor = "#1a365d"; // premium deep navy by default
       let minStartDateDays = 2; // default 2 days min from checkout
-      let swapAlternativeVariantIds = [
+      let eligibleAddonVariantIds = [
         "gid://shopify/ProductVariant/5001",
         "gid://shopify/ProductVariant/5002",
         "gid://shopify/ProductVariant/5003"
       ];
+      let tier1Discount = 15;
+      let tier2Discount = 20;
+      let tier3Discount = 25;
 
       if (fs.existsSync(configPath)) {
         try {
@@ -1205,8 +1214,17 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
             if (allConfigs[shop].minStartDateDays !== undefined) {
               minStartDateDays = parseInt(allConfigs[shop].minStartDateDays);
             }
-            if (allConfigs[shop].swapAlternativeVariantIds) {
-              swapAlternativeVariantIds = allConfigs[shop].swapAlternativeVariantIds;
+            if (allConfigs[shop].eligibleAddonVariantIds) {
+              eligibleAddonVariantIds = allConfigs[shop].eligibleAddonVariantIds;
+            }
+            if (allConfigs[shop].tier1Discount !== undefined) {
+              tier1Discount = parseInt(allConfigs[shop].tier1Discount);
+            }
+            if (allConfigs[shop].tier2Discount !== undefined) {
+              tier2Discount = parseInt(allConfigs[shop].tier2Discount);
+            }
+            if (allConfigs[shop].tier3Discount !== undefined) {
+              tier3Discount = parseInt(allConfigs[shop].tier3Discount);
             }
           }
         } catch (e) {
@@ -1226,6 +1244,9 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
   <meta charset="UTF-8">
   <title>The Glow Portal — Customer Subscription Console</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Playfair+Display:ital,wght@0,400;0,600;0,700;1,400&display=swap" rel="stylesheet">
   <style>
     :root {
       --primary-color: ${themePrimaryColor};
@@ -1234,10 +1255,11 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
       --secondary-color: ${themeSecondaryColor};
     }
     body {
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      font-family: 'Inter', -apple-system, sans-serif;
       margin: 0;
       padding: 0;
-      background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+      background-color: #faf9f6; /* premium warm alabaster ivory */
+      color: #111111;
       min-height: 100vh;
       display: flex;
       justify-content: center;
@@ -1245,63 +1267,77 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
     }
     #app {
       width: 95%;
-      max-width: 1000px;
+      max-width: 1050px;
       margin: 40px auto;
       background: white;
-      border-radius: 16px;
-      box-shadow: 0 8px 30px rgba(0,0,0,0.06);
-      padding: 24px;
+      border-radius: 4px; /* sharp editorial corners */
+      border: 1px solid #eae6df; /* ultra-thin subtle luxury border */
+      padding: 32px; /* airy spacious padding */
       box-sizing: border-box;
-      border: 1px solid rgba(0,0,0,0.04);
+      box-shadow: 0 12px 40px rgba(0,0,0,0.02); /* extremely soft luxury shadow */
+    }
+    .luxury-serif {
+      font-family: 'Playfair Display', Georgia, serif;
+      font-weight: 400;
     }
     .header {
       text-align: center;
-      border-bottom: 1px solid #eaeaea;
-      padding-bottom: 16px;
-      margin-bottom: 20px;
+      border-bottom: 1px solid #eae6df;
+      padding-bottom: 24px;
+      margin-bottom: 32px;
     }
     .header h2 {
       margin: 0;
-      color: #2c3e50;
-      font-size: 20px;
+      font-family: 'Playfair Display', Georgia, serif;
+      font-size: 26px;
+      color: #111111;
+      letter-spacing: 0.5px;
     }
     .header p {
-      margin: 4px 0 0 0;
-      color: #7f8c8d;
+      margin: 8px 0 0 0;
+      color: #718096;
       font-size: 13px;
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+      font-weight: 500;
     }
     .badge {
       display: inline-block;
-      padding: 4px 8px;
-      border-radius: 12px;
-      font-size: 11px;
+      padding: 4px 10px;
+      border-radius: 2px;
+      font-size: 10px;
       font-weight: bold;
       text-transform: uppercase;
       margin-top: 8px;
+      letter-spacing: 1px;
     }
-    .badge-active { background-color: #e2f1e8; color: #1e5128; }
-    .badge-paused { background-color: #fff3cd; color: #856404; }
+    .badge-active { background-color: #f0fdf4; color: #14532d; border: 1px solid #b8dfc4; }
+    .badge-paused { background-color: #fffbeb; color: #78350f; border: 1px solid #fde68a; }
     .section-title {
-      font-size: 13px;
-      font-weight: bold;
-      color: #34495e;
-      text-transform: uppercase;
-      margin-bottom: 8px;
+      font-family: 'Playfair Display', Georgia, serif;
+      font-size: 16px;
+      font-weight: 600;
+      color: #111111;
+      text-transform: none;
+      margin-bottom: 16px;
       letter-spacing: 0.5px;
+      border-bottom: 1px solid #eae6df;
+      padding-bottom: 8px;
     }
     .card {
-      background: #f8f9fa;
-      border: 1px solid #e9ecef;
-      border-radius: 8px;
-      padding: 12px;
-      margin-bottom: 16px;
+      background: #faf9f6;
+      border: 1px solid #eae6df;
+      border-radius: 4px;
+      padding: 24px;
+      margin-bottom: 20px;
+      transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
     }
     .item-row {
       display: flex;
       justify-content: space-between;
       font-size: 13px;
-      padding: 6px 0;
-      border-bottom: 1px solid #f1f3f5;
+      padding: 8px 0;
+      border-bottom: 1px solid #eae6df;
     }
     .item-row:last-child {
       border-bottom: none;
@@ -1309,109 +1345,116 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
     .grid {
       display: grid;
       grid-template-columns: 1fr 1fr;
-      gap: 10px;
-      margin-bottom: 12px;
+      gap: 12px;
+      margin-bottom: 16px;
     }
     button {
-      padding: 10px;
-      border-radius: 8px;
+      padding: 12px;
+      border-radius: 2px; /* sharp editorial buttons */
       border: none;
-      font-size: 13px;
-      font-weight: 600;
+      font-size: 11px;
+      font-weight: bold;
+      text-transform: uppercase;
+      letter-spacing: 1.5px;
       cursor: pointer;
-      transition: background 0.2s;
+      transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
     }
     .btn-primary {
-      background: var(--primary-color);
+      background: #111111; /* deep luxury obsidian black */
       color: white;
       width: 100%;
     }
     .btn-primary:hover {
-      background: var(--primary-hover);
+      background: var(--primary-color);
+      transform: translateY(-1px);
     }
     .btn-secondary {
-      background: #f1f3f5;
-      color: #2d3748;
-      border: 1px solid #cbd5e0;
+      background: white;
+      color: #111111;
+      border: 1px solid #111111;
     }
     .btn-secondary:hover {
-      background: #e2e8f0;
+      background: #faf9f6;
+      color: var(--primary-color);
+      border-color: var(--primary-color);
     }
     .notification {
-      background-color: #d4edda;
-      color: #155724;
-      border: 1px solid #c3e6cb;
-      padding: 10px;
-      border-radius: 8px;
-      margin-bottom: 16px;
+      background-color: #f0fdf4;
+      color: #14532d;
+      border: 1px solid #b8dfc4;
+      padding: 12px;
+      border-radius: 4px;
+      margin-bottom: 24px;
       font-size: 13px;
       text-align: center;
+      letter-spacing: 0.5px;
     }
     .product-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-      gap: 12px;
-      margin-bottom: 20px;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 16px;
+      margin-bottom: 24px;
     }
     .product-img {
       width: 100%;
-      height: 100px;
+      height: 120px;
       object-fit: cover;
-      border-radius: 8px;
-      margin-bottom: 8px;
-      background-color: #f7fafc;
+      border-radius: 2px;
+      margin-bottom: 12px;
+      background-color: #faf9f6;
     }
     .product-card {
       background: white;
-      border: 1px solid #cbd5e0;
-      border-radius: 12px;
-      padding: 12px;
+      border: 1px solid #eae6df;
+      border-radius: 4px;
+      padding: 16px;
       position: relative;
       cursor: pointer;
-      transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
-      box-shadow: 0 2px 4px rgba(0,0,0,0.02);
+      transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
       display: flex;
       flex-direction: column;
       justify-content: space-between;
-      min-height: 120px;
+      min-height: 140px;
     }
     .product-card:hover {
       transform: translateY(-2px);
-      box-shadow: 0 4px 12px rgba(0,0,0,0.05);
-      border-color: #a0aec0;
+      border-color: #111111;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.03);
     }
     .product-card.selected {
-      border: 2px solid var(--primary-color);
-      background-color: var(--primary-light);
-      box-shadow: 0 4px 12px rgba(184, 144, 71, 0.1);
+      border: 1.5px solid var(--primary-color);
+      background-color: #FAF9F6;
     }
     .product-card .price-tag {
       font-weight: 700;
-      color: var(--primary-color);
-      margin-top: 8px;
-      font-size: 14px;
+      color: #111111;
+      margin-top: 10px;
+      font-size: 13px;
+      letter-spacing: 0.5px;
     }
     .product-card .card-title {
+      font-family: 'Playfair Display', Georgia, serif;
       font-weight: 600;
-      font-size: 13px;
-      color: #2d3748;
+      font-size: 14px;
+      color: #111111;
       line-height: 1.3;
-      margin-bottom: 4px;
+      margin-bottom: 6px;
     }
     .product-card .card-subtitle {
-      font-size: 10px;
+      font-size: 9px;
       color: #718096;
       text-transform: uppercase;
-      letter-spacing: 0.5px;
+      letter-spacing: 1px;
+      font-weight: bold;
     }
     .product-card .badge-select {
       position: absolute;
-      top: 8px;
-      right: 8px;
+      top: 10px;
+      right: 10px;
       width: 18px;
       height: 18px;
       border-radius: 50%;
-      border: 1px solid #cbd5e0;
+      border: 1px solid #eae6df;
       background: white;
       display: flex;
       align-items: center;
@@ -1425,19 +1468,19 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
       color: white;
     }
     .sticky-footer {
-      background: #f8fafc;
-      border-top: 1px solid #e2e8f0;
-      padding: 16px 20px;
-      margin: 20px -24px -24px -24px;
-      border-bottom-left-radius: 16px;
-      border-bottom-right-radius: 16px;
+      background: #faf9f6;
+      border-top: 1px solid #eae6df;
+      padding: 20px 24px;
+      margin: 24px -32px -32px -32px;
+      border-bottom-left-radius: 4px;
+      border-bottom-right-radius: 4px;
     }
     .progress-bar-container {
-      background: #e2e8f0;
-      border-radius: 6px;
-      height: 6px;
+      background: #eae6df;
+      border-radius: 2px;
+      height: 4px;
       width: 100%;
-      margin-bottom: 12px;
+      margin-bottom: 16px;
       overflow: hidden;
     }
     .progress-bar-fill {
@@ -1449,53 +1492,57 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
       display: flex;
       justify-content: space-between;
       align-items: center;
-      margin-bottom: 12px;
+      margin-bottom: 16px;
     }
     .summary-text {
-      font-size: 12px;
-      font-weight: 600;
-      color: #4a5568;
+      font-size: 11px;
+      font-weight: bold;
+      color: #718096;
+      text-transform: uppercase;
+      letter-spacing: 1px;
     }
     .summary-total {
-      font-size: 18px;
-      font-weight: 800;
-      color: #2c3e50;
+      font-family: 'Playfair Display', Georgia, serif;
+      font-size: 20px;
+      font-weight: 700;
+      color: #111111;
     }
     /* Advanced Bundle Elements */
     .quantity-selector {
       display: inline-flex;
       align-items: center;
-      background: var(--primary-light);
-      border-radius: 20px;
-      padding: 2px 4px;
-      gap: 8px;
-      border: 1px solid var(--primary-color);
-      margin-top: 8px;
+      background: white;
+      border-radius: 2px;
+      padding: 3px 6px;
+      gap: 10px;
+      border: 1px solid #111111;
+      margin-top: 10px;
+      transition: all 0.3s;
     }
     .quantity-btn {
-      width: 22px;
-      height: 22px;
-      border-radius: 50%;
+      width: 20px;
+      height: 20px;
+      border-radius: 2px;
       border: none;
       background: white;
-      color: var(--primary-color);
+      color: #111111;
       font-weight: bold;
       display: flex;
       align-items: center;
       justify-content: center;
       cursor: pointer;
-      font-size: 14px;
+      font-size: 13px;
       padding: 0;
-      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-      transition: background 0.15s;
+      transition: all 0.2s;
     }
     .quantity-btn:hover {
-      background: #edf2f7;
+      background: #faf9f6;
+      color: var(--primary-color);
     }
     .quantity-count {
-      font-size: 13px;
+      font-size: 12px;
       font-weight: 700;
-      color: #2d3748;
+      color: #111111;
       min-width: 14px;
       text-align: center;
     }
@@ -1503,43 +1550,43 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
       display: flex;
       justify-content: center;
       gap: 12px;
-      margin-bottom: 16px;
+      margin-bottom: 20px;
     }
     .slot {
-      width: 70px;
-      height: 70px;
-      border-radius: 12px;
+      width: 72px;
+      height: 72px;
+      border-radius: 2px; /* sharp elegant luxury slot outline */
       display: flex;
       flex-direction: column;
       align-items: center;
       justify-content: center;
       position: relative;
       box-sizing: border-box;
-      transition: all 0.25s ease;
+      transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
     }
     .slot-empty {
-      border: 2px dashed #cbd5e0;
-      background: #f8fafc;
-      color: #a0aec0;
-      font-size: 20px;
+      border: 1px dashed #eae6df;
+      background: #faf9f6;
+      color: #cbd5e0;
+      font-size: 16px;
       font-weight: 300;
     }
     .slot-empty::after {
-      content: "ADD";
+      content: "EMPTY";
       font-size: 8px;
       font-weight: bold;
-      color: #a0aec0;
+      color: #cbd5e0;
       margin-top: 4px;
-      letter-spacing: 0.5px;
+      letter-spacing: 1px;
     }
     .slot-filled {
-      border: 2px solid var(--primary-color);
+      border: 1px solid var(--primary-color);
       background: var(--primary-light);
       color: var(--primary-color);
-      box-shadow: 0 2px 8px rgba(184, 144, 71, 0.1);
+      box-shadow: 0 4px 12px rgba(184, 144, 71, 0.05);
     }
     .slot-filled-icon {
-      font-size: 22px;
+      font-size: 20px;
       margin-bottom: 2px;
     }
     .slot-filled-title {
@@ -1554,35 +1601,37 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
       text-overflow: ellipsis;
     }
     .free-gift-card {
-      background: linear-gradient(135deg, #fffaf0 0%, #feebc8 100%);
-      border: 1px dashed #dd6b20;
-      border-radius: 12px;
-      padding: 12px;
-      margin-bottom: 16px;
+      background: #faf9f6;
+      border: 1px dashed var(--primary-color);
+      border-radius: 4px;
+      padding: 16px;
+      margin-bottom: 20px;
       display: flex;
       align-items: center;
-      gap: 12px;
+      gap: 16px;
       animation: fadeIn 0.4s ease-out;
     }
     .free-gift-badge {
-      background: #dd6b20;
+      background: var(--primary-color);
       color: white;
       font-size: 9px;
       font-weight: bold;
-      padding: 2px 6px;
-      border-radius: 10px;
+      padding: 2px 8px;
+      border-radius: 2px;
       text-transform: uppercase;
-      letter-spacing: 0.5px;
+      letter-spacing: 1px;
     }
     .free-gift-title {
-      font-size: 13px;
+      font-family: 'Playfair Display', Georgia, serif;
+      font-size: 14px;
       font-weight: bold;
-      color: #7b341e;
+      color: #111111;
     }
     .free-gift-desc {
       font-size: 11px;
-      color: #9c4221;
+      color: #718096;
       margin-top: 2px;
+      letter-spacing: 0.5px;
     }
     @keyframes fadeIn {
       from { opacity: 0; transform: translateY(4px); }
@@ -1591,66 +1640,74 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
     /* Dashboard Responsive Grid */
     .dashboard-layout {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-      gap: 24px;
+      grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+      gap: 32px;
       align-items: start;
     }
     .profile-card {
-      background: #fafbfa;
-      border: 1px solid #e2e8f0;
-      border-radius: 12px;
-      padding: 16px;
-      margin-bottom: 20px;
+      background: #ffffff;
+      border: 1px solid #eae6df;
+      border-radius: 4px;
+      padding: 24px;
+      margin-bottom: 24px;
     }
     .profile-title {
-      font-size: 14px;
+      font-family: 'Playfair Display', Georgia, serif;
+      font-size: 16px;
       font-weight: 700;
-      color: #2d3748;
-      margin-bottom: 12px;
+      color: #111111;
+      margin-bottom: 16px;
       display: flex;
       justify-content: space-between;
       align-items: center;
     }
     .form-group {
-      margin-bottom: 12px;
+      margin-bottom: 16px;
     }
     .form-label {
       display: block;
-      font-size: 11px;
+      font-size: 10px;
       font-weight: 700;
-      color: #4a5568;
+      color: #718096;
       text-transform: uppercase;
-      letter-spacing: 0.5px;
-      margin-bottom: 4px;
+      letter-spacing: 1px;
+      margin-bottom: 6px;
     }
     .form-select {
       width: 100%;
       padding: 10px;
-      border-radius: 8px;
-      border: 1px solid #cbd5e0;
+      border-radius: 2px;
+      border: 1px solid #eae6df;
       font-size: 13px;
       background: white;
       cursor: pointer;
       outline: none;
+      transition: all 0.3s;
+    }
+    .form-select:focus {
+      border-color: #111111;
     }
     .tag-container {
       display: flex;
       flex-wrap: wrap;
       gap: 6px;
-      margin-top: 4px;
+      margin-top: 6px;
     }
     .tag-badge {
-      background: #edf2f7;
-      color: #4a5568;
+      background: #faf9f6;
+      color: #111111;
+      border: 1px solid #eae6df;
       font-size: 11px;
       font-weight: 600;
-      padding: 2px 8px;
-      border-radius: 6px;
+      padding: 2px 10px;
+      border-radius: 2px;
       text-transform: capitalize;
+      letter-spacing: 0.5px;
     }
     .tag-badge-accent {
-      background: #e2f1e8;
-      color: #1e5128;
+      background: var(--primary-light);
+      color: var(--primary-color);
+      border-color: var(--primary-color);
     }
     .edit-btn {
       color: var(--primary-color);
@@ -1661,7 +1718,7 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
       font-weight: 700;
       cursor: pointer;
       text-transform: uppercase;
-      letter-spacing: 0.5px;
+      letter-spacing: 1px;
     }
   </style>
   <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
@@ -1686,6 +1743,10 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
       
       const milestoneCount = ${milestoneCount};
       const eligibleGifts = ${JSON.stringify(giftIds)};
+      const tier1Discount = ${tier1Discount};
+      const tier2Discount = ${tier2Discount};
+      const tier3Discount = ${tier3Discount};
+      const eligibleAddons = ${JSON.stringify(eligibleAddonVariantIds)};
 
       const [selectedGiftId, setSelectedGiftId] = React.useState("");
       const [claimingGift, setClaimingGift] = React.useState(false);
@@ -1708,7 +1769,6 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
       const [formEthical, setFormEthical] = React.useState(profile ? profile.ethicalPreferences || ["cruelty-free"] : ["cruelty-free"]);
       const [formHair, setFormHair] = React.useState(profile ? profile.hairType || "straight" : "straight");
       const [formClimate, setFormClimate] = React.useState(profile ? profile.localClimate || "temperate" : "temperate");
-      const [formZip, setFormZip] = React.useState(profile ? profile.zipCode || "" : "");
       const [formAllergens, setFormAllergens] = React.useState(profile ? (profile.allergens || []).join(", ") : "");
       const [savingProfile, setSavingProfile] = React.useState(false);
 
@@ -1864,7 +1924,7 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
             ethicalPreferences: formEthical,
             hairType: formHair,
             localClimate: formClimate,
-            zipCode: formZip,
+            zipCode: "",
             allergens: formAllergens.split(",").map(s => s.trim().toLowerCase()).filter(Boolean)
           })
         })
@@ -1890,7 +1950,7 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
         const uniqueSelectedIds = [...new Set(selectedVariants)];
         
         // Calculate volume discount factor
-        const discountFactor = selectedVariants.length >= 4 ? 0.75 : (selectedVariants.length === 3 ? 0.80 : 0.85);
+        const discountFactor = selectedVariants.length >= 4 ? (1 - tier3Discount / 100) : (selectedVariants.length === 3 ? (1 - tier2Discount / 100) : (1 - tier1Discount / 100));
 
         const itemsToCreate = uniqueSelectedIds.map(vId => {
           const p = liveProducts.find(prod => prod.variantId === vId);
@@ -1950,7 +2010,7 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
         const uniqueSelectedIds = [...new Set(selectedVariants)];
         
         // Calculate volume discount factor
-        const discountFactor = selectedVariants.length >= 4 ? 0.75 : (selectedVariants.length === 3 ? 0.80 : 0.85);
+        const discountFactor = selectedVariants.length >= 4 ? (1 - tier3Discount / 100) : (selectedVariants.length === 3 ? (1 - tier2Discount / 100) : (1 - tier1Discount / 100));
 
         const itemsToSave = uniqueSelectedIds.map(vId => {
           const p = liveProducts.find(prod => prod.variantId === vId);
@@ -2095,7 +2155,6 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
       };
       const setFrequency = (days) => triggerAction("/api/storefront/portal/frequency", { frequencyDays: days });
       const addDynamicAddOn = () => {
-        const eligibleAddons = ["gid://shopify/ProductVariant/5001", "gid://shopify/ProductVariant/5002", "gid://shopify/ProductVariant/5003"];
         const currentSkin = profile ? profile.skinType : "dry";
         const currentAllergens = profile ? (profile.allergens || []) : [];
 
@@ -2263,17 +2322,6 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
                     e("option", { value: "humid" }, "Humid / Tropical"),
                     e("option", { value: "cold" }, "Cold / Frigid")
                   )
-                ),
-
-                e("div", { className: "form-group" },
-                  e("label", { className: "form-label" }, "Zip / Postal Code"),
-                  e("input", { 
-                    type: "text", 
-                    value: formZip, 
-                    onChange: (ev) => setFormZip(ev.target.value), 
-                    placeholder: "e.g. 90210", 
-                    style: { width: "100%", padding: "10px", borderRadius: "8px", border: "1px solid #cbd5e0", fontSize: "13px", boxSizing: "border-box", outline: "none" } 
-                  })
                 ),
 
                 e("div", { className: "form-group", style: { marginBottom: "16px" } },
@@ -2448,15 +2496,15 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
               const t3Active = currentQty >= 4;
 
               const activeStyle = {
-                border: "2px solid #008060",
-                background: "#f0fdf4",
-                boxShadow: "0 4px 6px -1px rgba(0, 128, 96, 0.1)"
+                border: "1.5px solid var(--primary-color)",
+                background: "var(--primary-light)",
+                boxShadow: "none"
               };
 
               return e("div", { style: { marginBottom: "20px" } },
                 e("div", { style: { fontSize: "11px", fontWeight: "700", color: "#2c3e50", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "8px", display: "flex", justifyContent: "space-between", alignItems: "center" } }, 
                   e("span", null, "🔥 Kaching Volume Breaks"),
-                  currentQty > 0 && e("span", { style: { color: "#008060", fontSize: "10px", fontWeight: "bold" } }, currentQty + " " + (currentQty === 1 ? "Item" : "Items") + " Selected")
+                  currentQty > 0 && e("span", { style: { color: "var(--primary-color)", fontSize: "10px", fontWeight: "bold" } }, currentQty + " " + (currentQty === 1 ? "Item" : "Items") + " Selected")
                 ),
                 e("div", { style: { display: "flex", gap: "8px" } },
                   // Tier 1 (1-2 items)
@@ -2464,51 +2512,51 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
                     style: { 
                       flex: 1, 
                       padding: "8px", 
-                      borderRadius: "8px", 
-                      border: "1.5px solid #cbd5e0", 
+                      borderRadius: "4px", 
+                      border: "1px solid #eae6df", 
                       background: "white", 
                       textAlign: "center",
                       transition: "all 0.2s",
                       ...(t1Active ? activeStyle : {})
                     }
                   },
-                    e("div", { style: { fontSize: "10px", fontWeight: "bold", color: t1Active ? "#14532d" : "#718096" } }, "1-2 Items"),
-                    e("div", { style: { fontSize: "12px", fontWeight: "800", color: t1Active ? "#008060" : "#2d3748", margin: "2px 0" } }, "15% OFF"),
-                    e("span", { style: { fontSize: "8px", background: t1Active ? "#008060" : "#718096", color: "white", padding: "1px 4px", borderRadius: "8px" } }, t1Active ? "✓ Active" : "Bronze")
+                    e("div", { style: { fontSize: "10px", fontWeight: "bold", color: t1Active ? "var(--primary-color)" : "#718096" } }, "1-2 Items"),
+                    e("div", { style: { fontSize: "12px", fontWeight: "800", color: t1Active ? "var(--primary-color)" : "#2d3748", margin: "2px 0" } }, tier1Discount + "% OFF"),
+                    e("span", { style: { fontSize: "8px", background: t1Active ? "var(--primary-color)" : "#718096", color: "white", padding: "1px 4px", borderRadius: "2px" } }, t1Active ? "✓ Active" : "Bronze")
                   ),
                   // Tier 2 (3 items)
                   e("div", { 
                     style: { 
                       flex: 1, 
                       padding: "8px", 
-                      borderRadius: "8px", 
-                      border: "1.5px solid #cbd5e0", 
+                      borderRadius: "4px", 
+                      border: "1px solid #eae6df", 
                       background: "white", 
                       textAlign: "center",
                       transition: "all 0.2s",
                       ...(t2Active ? activeStyle : {})
                     }
                   },
-                    e("div", { style: { fontSize: "10px", fontWeight: "bold", color: t2Active ? "#14532d" : "#718096" } }, "3 Items"),
-                    e("div", { style: { fontSize: "12px", fontWeight: "800", color: t2Active ? "#008060" : "#2d3748", margin: "2px 0" } }, "20% OFF"),
-                    e("span", { style: { fontSize: "8px", background: t2Active ? "#008060" : "#718096", color: "white", padding: "1px 4px", borderRadius: "8px" } }, t2Active ? "✓ Active" : "Silver")
+                    e("div", { style: { fontSize: "10px", fontWeight: "bold", color: t2Active ? "var(--primary-color)" : "#718096" } }, "3 Items"),
+                    e("div", { style: { fontSize: "12px", fontWeight: "800", color: t2Active ? "var(--primary-color)" : "#2d3748", margin: "2px 0" } }, tier2Discount + "% OFF"),
+                    e("span", { style: { fontSize: "8px", background: t2Active ? "var(--primary-color)" : "#718096", color: "white", padding: "1px 4px", borderRadius: "2px" } }, t2Active ? "✓ Active" : "Silver")
                   ),
                   // Tier 3 (4+ items)
                   e("div", { 
                     style: { 
                       flex: 1, 
                       padding: "8px", 
-                      borderRadius: "8px", 
-                      border: "1.5px solid #cbd5e0", 
+                      borderRadius: "4px", 
+                      border: "1px solid #eae6df", 
                       background: "white", 
                       textAlign: "center",
                       transition: "all 0.2s",
                       ...(t3Active ? activeStyle : {})
                     }
                   },
-                    e("div", { style: { fontSize: "10px", fontWeight: "bold", color: t3Active ? "#14532d" : "#718096" } }, "4+ Items"),
-                    e("div", { style: { fontSize: "12px", fontWeight: "800", color: t3Active ? "#008060" : "#2d3748", margin: "2px 0" } }, "25% OFF"),
-                    e("span", { style: { fontSize: "8px", background: t3Active ? "#008060" : "#718096", color: "white", padding: "1px 4px", borderRadius: "8px" } }, t3Active ? "✓ Active" : "Gold / Max")
+                    e("div", { style: { fontSize: "10px", fontWeight: "bold", color: t3Active ? "var(--primary-color)" : "#718096" } }, "4+ Items"),
+                    e("div", { style: { fontSize: "12px", fontWeight: "800", color: t3Active ? "var(--primary-color)" : "#2d3748", margin: "2px 0" } }, tier3Discount + "% OFF"),
+                    e("span", { style: { fontSize: "8px", background: t3Active ? "var(--primary-color)" : "#718096", color: "white", padding: "1px 4px", borderRadius: "2px" } }, t3Active ? "✓ Active" : "Gold / Max")
                   )
                 )
               );
@@ -4142,6 +4190,11 @@ app.get("/", (req, res) => {
       const [adminMinStartDateDays, setAdminMinStartDateDays] = React.useState("2");
       const [adminStartDate, setAdminStartDate] = React.useState("");
 
+      const [adminTier1, setAdminTier1] = React.useState(15);
+      const [adminTier2, setAdminTier2] = React.useState(20);
+      const [adminTier3, setAdminTier3] = React.useState(25);
+      const [adminAddons, setAdminAddons] = React.useState([]);
+
       React.useEffect(() => {
         const d = new Date(Date.now() + parseInt(adminMinStartDateDays || "2") * 24 * 60 * 60 * 1000);
         setAdminStartDate(d.toISOString().split("T")[0]);
@@ -4506,11 +4559,23 @@ app.get("/", (req, res) => {
             if (data.themeSecondaryColor) setAdminThemeSecondary(data.themeSecondaryColor);
             if (data.maxAddonLimit !== undefined) setAdminMaxAddonLimit(data.maxAddonLimit.toString());
             if (data.minStartDateDays !== undefined) setAdminMinStartDateDays(data.minStartDateDays.toString());
+            if (data.tier1Discount !== undefined) setAdminTier1(data.tier1Discount);
+            if (data.tier2Discount !== undefined) setAdminTier2(data.tier2Discount);
+            if (data.tier3Discount !== undefined) setAdminTier3(data.tier3Discount);
+            if (data.eligibleAddonVariantIds !== undefined) setAdminAddons(data.eligibleAddonVariantIds);
           })
           .catch(() => {});
       };
 
-      const handleSaveThemeSettings = (primary, secondary, limit, minDays) => {
+      const handleAddonToggle = (variantId) => {
+        if (adminAddons.includes(variantId)) {
+          setAdminAddons(adminAddons.filter(id => id !== variantId));
+        } else {
+          setAdminAddons([...adminAddons, variantId]);
+        }
+      };
+
+      const handleSaveThemeSettings = (primary, secondary, limit, minDays, t1, t2, t3, addons) => {
         fetch("/api/admin/theme-settings", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -4519,13 +4584,17 @@ app.get("/", (req, res) => {
             themePrimaryColor: primary,
             themeSecondaryColor: secondary,
             maxAddonLimit: parseInt(limit || "1"),
-            minStartDateDays: parseInt(minDays || "2")
+            minStartDateDays: parseInt(minDays || "2"),
+            tier1Discount: parseInt(t1 || "15"),
+            tier2Discount: parseInt(t2 || "20"),
+            tier3Discount: parseInt(t3 || "25"),
+            eligibleAddonVariantIds: addons
           })
         })
         .then(res => res.json())
         .then(data => {
           if (data.success) {
-            setNotification("🎨 Curation branding & custom constraints saved successfully!");
+            setNotification("🎨 Curation branding, pricing breaks, and allowed add-ons saved successfully!");
             setTimeout(() => setNotification(null), 3000);
             setAdminThemePrimary(primary);
             setAdminThemeSecondary(secondary);
@@ -4535,6 +4604,18 @@ app.get("/", (req, res) => {
               }
               if (data.themeConfig.minStartDateDays !== undefined) {
                 setAdminMinStartDateDays(data.themeConfig.minStartDateDays.toString());
+              }
+              if (data.themeConfig.tier1Discount !== undefined) {
+                setAdminTier1(data.themeConfig.tier1Discount);
+              }
+              if (data.themeConfig.tier2Discount !== undefined) {
+                setAdminTier2(data.themeConfig.tier2Discount);
+              }
+              if (data.themeConfig.tier3Discount !== undefined) {
+                setAdminTier3(data.themeConfig.tier3Discount);
+              }
+              if (data.themeConfig.eligibleAddonVariantIds !== undefined) {
+                setAdminAddons(data.themeConfig.eligibleAddonVariantIds);
               }
             }
           }
@@ -4923,7 +5004,7 @@ app.get("/", (req, res) => {
       const renderQuizTab = () => {
         return e("div", null,
           e("div", { className: "card" },
-            e("h3", { style: { fontSize: "16px", fontWeight: "600", marginBottom: "12px" } }, "Simulated Storefront Preference Quiz (Phase 3)"),
+            e("h3", { style: { fontSize: "16px", fontWeight: "600", marginBottom: "12px" } }, "Storefront Preference Quiz"),
             e("p", { style: { color: "#6d7175", marginBottom: "20px" } }, "This preference profile is embedded at signup or sent via surveys to build customer metadata."),
             e("div", { style: { marginBottom: "16px" } },
               e("label", { style: { display: "block", fontWeight: "bold", marginBottom: "6px" } }, "Select Customer"),
@@ -5011,11 +5092,6 @@ app.get("/", (req, res) => {
                 e("option", { value: "temperate" }, "Temperate / Seasonal"),
                 e("option", { value: "cold" }, "Cold / Dry")
               )
-            ),
-            e("div", { style: { marginBottom: "16px" } },
-              e("label", { style: { display: "block", fontWeight: "bold", marginBottom: "6px" } }, "Zip / Postal Code"),
-              e("input", { type: "text", value: quizZipCode, onChange: (e) => setQuizZipCode(e.target.value), placeholder: "e.g. 90210", style: { width: "100%", padding: "8px", borderRadius: "4px", border: "1px solid #8c9196", boxSizing: "border-box" } }),
-              e("p", { style: { margin: "4px 0 0 0", fontSize: "11px", color: "#6d7175" } }, "Used to dynamically analyze local weather, UV indexes, and humidity to auto-tune skincare formulation.")
             ),
             e("div", { style: { marginBottom: "16px" } },
               e("label", { style: { display: "block", fontWeight: "bold", marginBottom: "6px" } }, "Ingredient Allergens / Exclusions"),
@@ -5697,7 +5773,51 @@ app.get("/", (req, res) => {
                 })
               )
             ),
-            e("button", { className: "button-primary", onClick: () => handleSaveThemeSettings(adminThemePrimary, adminThemeSecondary, adminMaxAddonLimit, adminMinStartDateDays) }, "💾 Save Custom Portal Settings")
+
+            // Exposing Competitor Pricing Breaks Inputs (Competitor Parity - Kaching style)
+            e("div", { style: { borderTop: "1px solid #cbd5e0", paddingTop: "16px", marginTop: "16px", marginBottom: "16px" } },
+              e("h4", { style: { fontSize: "14px", fontWeight: "600", color: "#2c3e50", marginBottom: "8px" } }, "🔥 Configure Quantity Breaks Discounts (%)"),
+              e("p", { style: { color: "#6d7175", fontSize: "12px", marginBottom: "12px" } }, "Globally define the Kaching-style volume breaks percentage discounts dynamically displayed and applied in the visual cart checkout and portal."),
+              e("div", { style: { display: "flex", gap: "16px", flexWrap: "wrap" } },
+                e("div", { style: { flex: 1, minWidth: "140px" } },
+                  e("label", { style: { display: "block", fontSize: "11px", fontWeight: "bold", color: "#4a5568", marginBottom: "4px" } }, "Bronze Tier (1-2 items) Discount (%)"),
+                  e("input", { type: "number", min: "0", max: "90", value: adminTier1, onChange: (ev) => setAdminTier1(parseInt(ev.target.value) || 0), style: { width: "100%", padding: "8px", borderRadius: "4px", border: "1px solid #cbd5e0" } })
+                ),
+                e("div", { style: { flex: 1, minWidth: "140px" } },
+                  e("label", { style: { display: "block", fontSize: "11px", fontWeight: "bold", color: "#4a5568", marginBottom: "4px" } }, "Silver Tier (3 items) Discount (%)"),
+                  e("input", { type: "number", min: "0", max: "90", value: adminTier2, onChange: (ev) => setAdminTier2(parseInt(ev.target.value) || 0), style: { width: "100%", padding: "8px", borderRadius: "4px", border: "1px solid #cbd5e0" } })
+                ),
+                e("div", { style: { flex: 1, minWidth: "140px" } },
+                  e("label", { style: { display: "block", fontSize: "11px", fontWeight: "bold", color: "#4a5568", marginBottom: "4px" } }, "Gold Tier (4+ items) Discount (%)"),
+                  e("input", { type: "number", min: "0", max: "90", value: adminTier3, onChange: (ev) => setAdminTier3(parseInt(ev.target.value) || 0), style: { width: "100%", padding: "8px", borderRadius: "4px", border: "1px solid #cbd5e0" } })
+                )
+              )
+            ),
+
+            // Exposing Allowed Add-Ons Catalog Selection checklist
+            e("div", { style: { borderTop: "1px solid #cbd5e0", paddingTop: "16px", marginBottom: "20px" } },
+              e("h4", { style: { fontSize: "14px", fontWeight: "600", color: "#2c3e50", marginBottom: "8px" } }, "🛍️ Configure Allowed Subscription Add-Ons Catalog"),
+              e("p", { style: { color: "#6d7175", fontSize: "12px", marginBottom: "12px" } }, "Choose which product variants from your live Shopify catalog are permitted for one-time subscription add-ons inside visual cart slots and chatbots."),
+              e("div", { style: { maxHeight: "200px", overflowY: "auto", border: "1px solid #e1e3e5", padding: "10px", borderRadius: "4px", backgroundColor: "#fafbfb" } },
+                inventory.map((item, idx) => {
+                  const isChecked = adminAddons.includes(item.productId);
+                  return e("div", { key: idx, style: { display: "flex", alignItems: "center", marginBottom: "10px" } },
+                    e("input", { 
+                      type: "checkbox", 
+                      id: "addon_" + idx, 
+                      checked: isChecked, 
+                      onChange: () => handleAddonToggle(item.productId),
+                      style: { marginRight: "10px" } 
+                    }),
+                    e("label", { htmlFor: "addon_" + idx, style: { cursor: "pointer", fontSize: "13px" } }, 
+                      formatProductName(item.productName || item.productId)
+                    )
+                  );
+                })
+              )
+            ),
+
+            e("button", { className: "button-primary", onClick: () => handleSaveThemeSettings(adminThemePrimary, adminThemeSecondary, adminMaxAddonLimit, adminMinStartDateDays, adminTier1, adminTier2, adminTier3, adminAddons) }, "💾 Save Custom Portal Settings")
           )
         );
       };
