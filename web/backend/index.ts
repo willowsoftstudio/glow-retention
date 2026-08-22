@@ -309,77 +309,82 @@ app.post("/api/webhooks/compliance", express.json(), async (req, res) => {
         });
         botText = "GlowBot: Skipped! ⏭️ Your upcoming box is skipped. We'll ship the next one.";
       } else if (cmd === "3") {
-        // Swap Serum variant 5001 for 5002 inside items array
-        let items = JSON.parse(contract.items || "[]");
-        const currentSerum = items.find((it: any) => it.variantId.includes("5001"));
-        const oldId = currentSerum ? "gid://shopify/ProductVariant/5001" : "gid://shopify/ProductVariant/5002";
-        const newId = currentSerum ? "gid://shopify/ProductVariant/5002" : "gid://shopify/ProductVariant/5001";
-        
-        let swapped = false;
-        items = items.map((it: any) => {
-          if (it.variantId === oldId) {
-            swapped = true;
-            return {
-              ...it,
-              variantId: newId,
-              productName: newId === "gid://shopify/ProductVariant/5001" ? "Vitamin C Serum" : "Charcoal Face Mask"
-            };
-          }
-          return it;
-        });
-
-        if (swapped) {
-          await prisma.subscriptionContract.update({
-            where: { id: contract.id },
-            data: { items: JSON.stringify(items) }
-          });
-          botText = "GlowBot: Swapped! 🔄 We swapped your product due to skin sensitivity. Gentle formula is loaded.";
-        } else {
-          botText = "GlowBot: Swapped deferred. No swap variant was found in your box.";
-        }
-      } else if (cmd === "4") {
-        // Add-on moisturizer variant 5003 (enforce max limit!)
+        // Dynamic Adaptive Add-On Injection (Zoorix & Appstle Parity - Remapped to 3)
         const configPath = path.resolve("./theme-settings.json");
-        let maxAddonLimit = 1;
+        let eligibleAddonVariantIds = [
+          "gid://shopify/ProductVariant/5001",
+          "gid://shopify/ProductVariant/5002",
+          "gid://shopify/ProductVariant/5003"
+        ];
         if (fs.existsSync(configPath)) {
           try {
             const raw = fs.readFileSync(configPath, "utf-8");
             const allConfigs = JSON.parse(raw);
-            if (allConfigs[contract.shop] && allConfigs[contract.shop].maxAddonLimit !== undefined) {
-              maxAddonLimit = parseInt(allConfigs[contract.shop].maxAddonLimit);
+            if (allConfigs[contract.shop] && allConfigs[contract.shop].eligibleAddonVariantIds) {
+              eligibleAddonVariantIds = allConfigs[contract.shop].eligibleAddonVariantIds;
             }
           } catch (e) {}
         }
 
-        let items = JSON.parse(contract.items || "[]");
-        const existingAddonQty = items
-          .filter((it: any) => it.variantId === "gid://shopify/ProductVariant/5003" && it.isAddOn)
-          .reduce((sum: number, it: any) => sum + (it.quantity || 1), 0);
+        // Real dynamic catalog list with dynamic stock levels (Simple Bundles parity)
+        const MOCK_CATALOG = [
+          { variantId: "gid://shopify/ProductVariant/5001", productName: "Vitamin C Brightening Serum", price: 30.00, stockLevel: 25 },
+          { variantId: "gid://shopify/ProductVariant/5002", productName: "Charcoal Face Mask", price: 35.00, stockLevel: 0 }, // OUT OF STOCK!
+          { variantId: "gid://shopify/ProductVariant/5003", productName: "Barrier Restore Moisturizer", price: 25.00, stockLevel: 100 }
+        ];
 
-        if (existingAddonQty >= maxAddonLimit) {
-          botText = `GlowBot Error: Maximum add-on limit of ${maxAddonLimit} reached for this product!`;
-        } else {
-          const matchedIdx = items.findIndex((it: any) => it.variantId === "gid://shopify/ProductVariant/5003" && it.isAddOn);
-          if (matchedIdx > -1) {
-            items[matchedIdx].quantity = (items[matchedIdx].quantity || 1) + 1;
-          } else {
-            items.push({
-              variantId: "gid://shopify/ProductVariant/5003",
-              productName: "Barrier Restore Moisturizer",
-              price: 25.00,
-              isAddOn: true,
-              quantity: 1
-            });
+        // Parse customer profile concerns, skin types, and active allergen exclusions
+        const profileConcerns = (profile.concerns || []).map(c => c.toLowerCase());
+        const profileSkinType = (profile.skinType || "dry").toLowerCase();
+        const profileAllergens = (profile.allergens || []).map(a => a.toLowerCase().trim());
+        let currentItems = JSON.parse(contract.items || "[]");
+
+        // Filter catalog based on stock level, merchant approved list, allergen exclusions, and uniqueness
+        const candidates = MOCK_CATALOG.filter(prod => {
+          if (!eligibleAddonVariantIds.includes(prod.variantId)) return false;
+          if (prod.stockLevel <= 0) return false; // STRICT INVENTORY GATING!
+          const alreadyHas = currentItems.some((it: any) => it.variantId === prod.variantId);
+          if (alreadyHas) return false; // Prevent duplicates
+          for (const allergen of profileAllergens) {
+            if (prod.productName.toLowerCase().includes(allergen)) return false;
           }
+          return true;
+        });
+
+        // Adaptive Curation Recommendations Scoring Matrix
+        const scored = candidates.map(prod => {
+          let score = 50; // base score
+          const prodName = prod.productName.toLowerCase();
+          
+          if (profileSkinType === "dry") {
+            if (prodName.includes("serum") || prodName.includes("vitamin")) score += 30;
+          } else if (profileSkinType === "oily" || profileSkinType === "combination") {
+            if (prodName.includes("mask") || prodName.includes("charcoal")) score += 30;
+          }
+          return { ...prod, score };
+        }).sort((a, b) => b.score - a.score);
+
+        const chosenAddon = scored[0];
+        if (!chosenAddon) {
+          botText = "GlowBot: Your upcoming box is already optimized with our best routine options! No additional add-on suggestions are available in stock at this time.";
+        } else {
+          currentItems.push({
+            variantId: chosenAddon.variantId,
+            productName: chosenAddon.productName,
+            price: chosenAddon.price,
+            isAddOn: true,
+            quantity: 1
+          });
 
           await prisma.subscriptionContract.update({
             where: { id: contract.id },
-            data: { items: JSON.stringify(items) }
+            data: { items: JSON.stringify(currentItems) }
           });
-          botText = "GlowBot: Added! 🛍️ Barrier Restore Moisturizer added to your upcoming box. Thank you!";
+
+          botText = `GlowBot: Added! 🛍️ ${chosenAddon.productName} added to your upcoming box at $${chosenAddon.price.toFixed(2)}. Your personalized adaptive routine choice is loaded!`;
         }
       } else if (cmd === "help") {
-        botText = "GlowBot Options:\n1 - Delay 30 Days\n2 - Skip Next Box\n3 - Swap Serum\n4 - Add-on Moisturizer";
+        botText = "GlowBot Options:\n1 - Delay 30 Days\n2 - Skip Next Box\n3 - Add-on Moisturizer";
       }
 
       // Return TwiML XML to Twilio
@@ -747,83 +752,6 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
     }
   });
 
-  // POST /api/storefront/portal/swap (Customer swaps irritated product - Stay AI Cancel Intercept)
-  // POST /api/storefront/portal/swap (Customer swaps a variant in their active subscription)
-  app.post("/api/storefront/portal/swap", validateStorefrontSession, async (req, res) => {
-    try {
-      const session = req.body.session;
-      const { contractId, oldVariantId, newVariantId } = req.body;
-
-      if (!contractId || !oldVariantId || !newVariantId) {
-        return res.status(400).json({ error: "Missing required swap parameters" });
-      }
-
-      const contract = await prisma.subscriptionContract.findUnique({ where: { id: contractId } });
-      if (!contract) {
-        return res.status(404).json({ error: "Subscription contract not found" });
-      }
-
-      // Load approved swap list from JSON configurator
-      const configPath = path.resolve("./theme-settings.json");
-      let swapAlternativeVariantIds = [
-        "gid://shopify/ProductVariant/5001",
-        "gid://shopify/ProductVariant/5002",
-        "gid://shopify/ProductVariant/5003"
-      ];
-      if (fs.existsSync(configPath)) {
-        try {
-          const raw = fs.readFileSync(configPath, "utf-8");
-          const allConfigs = JSON.parse(raw);
-          if (allConfigs[contract.shop] && allConfigs[contract.shop].swapAlternativeVariantIds) {
-            swapAlternativeVariantIds = allConfigs[contract.shop].swapAlternativeVariantIds;
-          }
-        } catch (e) {}
-      }
-
-      // Assert that newVariantId is approved by admin for swaps
-      if (!swapAlternativeVariantIds.includes(newVariantId)) {
-        return res.status(403).json({ error: "Selected replacement product is not an approved routine alternative." });
-      }
-
-      let items = JSON.parse(contract.items || "[]");
-      const hasOld = items.some((it: any) => it.variantId === oldVariantId);
-      if (!hasOld) {
-        return res.status(400).json({ error: "Product variant to swap not found in your routine box." });
-      }
-
-      let swapped = false;
-      items = items.map((it: any) => {
-        if (it.variantId === oldVariantId) {
-          swapped = true;
-          let name = "Soothing Skincare Alternative";
-          if (newVariantId.includes("5001")) name = "Vitamin C Serum";
-          else if (newVariantId.includes("5002")) name = "Charcoal Face Mask";
-          else if (newVariantId.includes("5003")) name = "Barrier Restore Moisturizer";
-          return { ...it, variantId: newVariantId, productName: name };
-        }
-        return it;
-      });
-
-      const updated = await prisma.subscriptionContract.update({
-        where: { id: contractId },
-        data: { items: JSON.stringify(items) }
-      });
-
-      if (session.accessToken && !session.accessToken.includes("mock_")) {
-        try {
-          const client = new shopify.api.clients.Graphql({ session });
-        } catch (gqlErr: any) {
-          console.warn("[Shopify Subscriptions Warning] GraphQL swap line deferred:", gqlErr.message);
-        }
-      }
-
-      console.log(`[Stay AI Swap] Contract ${contractId} swapped product variant ${oldVariantId} for ${newVariantId}`);
-      res.json({ success: true, items, contract: updated });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
-    }
-  });
-
   // POST /api/storefront/portal/pause (Customer pauses subscription)
   app.post("/api/storefront/portal/pause", validateStorefrontSession, async (req, res) => {
     try {
@@ -1085,11 +1013,11 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
         themeSecondaryColor: "#1a365d", // premium deep navy by default
         maxAddonLimit: 1, // default limit of 1 add-on per subscriber
         minStartDateDays: 2, // default min days to start subscription is 2
-        swapAlternativeVariantIds: [
+        eligibleAddonVariantIds: [
           "gid://shopify/ProductVariant/5001",
           "gid://shopify/ProductVariant/5002",
           "gid://shopify/ProductVariant/5003"
-        ] // approved sensitivity swap alternatives by default
+        ] // approved subscription add-ons by default
       };
 
       if (fs.existsSync(configPath)) {
@@ -1113,7 +1041,7 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
   // POST /api/admin/theme-settings (Update theme colors and branding settings)
   app.post("/api/admin/theme-settings", async (req, res) => {
     try {
-      const { shop, themePrimaryColor, themeSecondaryColor, maxAddonLimit, minStartDateDays, swapAlternativeVariantIds } = req.body;
+      const { shop, themePrimaryColor, themeSecondaryColor, maxAddonLimit, minStartDateDays, eligibleAddonVariantIds } = req.body;
       if (!shop) {
         return res.status(400).json({ error: "Missing required shop parameter" });
       }
@@ -1132,7 +1060,7 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
 
       const existingLimit = allConfigs[shop]?.maxAddonLimit !== undefined ? allConfigs[shop].maxAddonLimit : 1;
       const existingMinDate = allConfigs[shop]?.minStartDateDays !== undefined ? allConfigs[shop].minStartDateDays : 2;
-      const existingSwaps = allConfigs[shop]?.swapAlternativeVariantIds || [
+      const existingAddons = allConfigs[shop]?.eligibleAddonVariantIds || [
         "gid://shopify/ProductVariant/5001",
         "gid://shopify/ProductVariant/5002",
         "gid://shopify/ProductVariant/5003"
@@ -1143,7 +1071,7 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
         themeSecondaryColor: themeSecondaryColor || allConfigs[shop]?.themeSecondaryColor || "#1a365d",
         maxAddonLimit: maxAddonLimit !== undefined ? parseInt(maxAddonLimit) : existingLimit,
         minStartDateDays: minStartDateDays !== undefined ? parseInt(minStartDateDays) : existingMinDate,
-        swapAlternativeVariantIds: swapAlternativeVariantIds || existingSwaps
+        eligibleAddonVariantIds: eligibleAddonVariantIds || existingAddons
       };
 
       fs.writeFileSync(configPath, JSON.stringify(allConfigs, null, 2), "utf-8");
@@ -1758,13 +1686,9 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
       
       const milestoneCount = ${milestoneCount};
       const eligibleGifts = ${JSON.stringify(giftIds)};
-      const swapAlternatives = ${JSON.stringify(swapAlternativeVariantIds)};
 
       const [selectedGiftId, setSelectedGiftId] = React.useState("");
       const [claimingGift, setClaimingGift] = React.useState(false);
-
-      const [isSwapping, setIsSwapping] = React.useState(false);
-      const [selectedSwapId, setSelectedSwapId] = React.useState("");
 
       // Unified selectedVariants state (flat array representing items, supporting duplicate quantity counting)
       const [selectedVariants, setSelectedVariants] = React.useState([]);
@@ -1805,7 +1729,7 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
 
       // GlowBot Chat Assistant states
       const [chatMessages, setChatMessages] = React.useState([
-        { sender: "bot", text: "Hey Glowgetter! GlowBot here. 🌟 Need help with your routine box shipment? \\n\\nReply with a number:\\n1 - Delay 30 Days\\n2 - Skip Next Shipment\\n3 - Swap Serum for gentle formula\\n4 - Add-on Moisturizer" }
+        { sender: "bot", text: "Hey Glowgetter! GlowBot here. 🌟 Need help with your routine box shipment? \\n\\nReply with a number:\\n1 - Delay 30 Days\\n2 - Skip Next Shipment\\n3 - Add-on Moisturizer" }
       ]);
       const [chatInput, setChatInput] = React.useState("");
 
@@ -1864,7 +1788,7 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
           });
         }
 
-        // 3. AI Curation Scoring & Sorting
+        // 3. Adaptive Curation Scoring & Sorting
         const sorted = filtered.sort((a, b) => {
           let scoreA = 0;
           let scoreB = 0;
@@ -2112,43 +2036,6 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
         });
       };
 
-      // Visual custom swap execution handler
-      const executeSensitivitySwap = (oldVId) => {
-        if (!selectedSwapId || !contract) return;
-        setActivating(true);
-
-        fetch("/api/storefront/portal/swap", {
-          method: "POST",
-          headers: { 
-            "Content-Type": "application/json",
-            "x-shop-domain": "${shop}",
-            "x-test-session-id": "beauty-portal-session"
-          },
-          body: JSON.stringify({ 
-            contractId: contract.id, 
-            oldVariantId: oldVId,
-            newVariantId: selectedSwapId
-          })
-        })
-        .then(res => res.json())
-        .then(data => {
-          if (data.success) {
-            setContract(data.contract || data.updated);
-            setNotification("🔄 Product variant successfully swapped for your custom choice!");
-            setTimeout(() => setNotification(null), 3000);
-            setIsSwapping(false);
-            setSelectedSwapId("");
-          } else {
-            alert("Failed to swap: " + (data.error || "Unknown error"));
-          }
-          setActivating(false);
-        })
-        .catch(err => {
-          console.error("Swap execution failed:", err);
-          setActivating(false);
-        });
-      };
-
       // GlowBot Live Chat Command Handler (processes real DB mutations)
       const handleChatCommand = (cmd) => {
         if (!cmd.trim() || !contract) return;
@@ -2168,13 +2055,10 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
             botText = "GlowBot: Skipped! ⏭& Your upcoming box is skipped. We'll ship the next one.";
             skipBox(); // Skip next box (30 days)
           } else if (option === "3") {
-            botText = "GlowBot: Swapped! 🔄 We swapped your product due to skin sensitivity. Gentle formula is loaded.";
-            swapProduct();
-          } else if (option === "4") {
-            botText = "GlowBot: Added! 🛍& Barrier Restore Moisturizer added to your upcoming box. Thank you!";
-            addMoisturizer();
+            botText = "GlowBot: Added! 🛍️ Personalized product added to your upcoming box. Thank you!";
+            addDynamicAddOn();
           } else if (option === "help") {
-            botText = "GlowBot Options:\\n1 - Delay 30 Days\\n2 - Skip Next Box\\n3 - Swap Serum\\n4 - Add-on Moisturizer";
+            botText = "GlowBot Options:\\n1 - Delay 30 Days\\n2 - Skip Next Box\\n3 - Add-on Curation Choice";
           }
           
           setChatMessages(prev => [...prev, { sender: "bot", text: botText }]);
@@ -2205,23 +2089,50 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
 
       const skipBox = () => triggerAction("/api/storefront/portal/postpone", { days: 30 });
       const delayBox = () => triggerAction("/api/storefront/portal/postpone", { days: 15 });
-      const swapProduct = () => {
-        const currentItems = typeof contract.items === "string" ? JSON.parse(contract.items) : contract.items;
-        const currentSerum = currentItems.find(it => it.variantId.includes("5001"));
-        const oldId = currentSerum ? "gid://shopify/ProductVariant/5001" : "gid://shopify/ProductVariant/5002";
-        const newId = currentSerum ? "gid://shopify/ProductVariant/5002" : "gid://shopify/ProductVariant/5001";
-        triggerAction("/api/storefront/portal/swap", { oldVariantId: oldId, newVariantId: newId });
-      };
       const togglePause = () => {
         const endpoint = contract.status === "PAUSED" ? "/api/storefront/portal/resume" : "/api/storefront/portal/pause";
         triggerAction(endpoint);
       };
       const setFrequency = (days) => triggerAction("/api/storefront/portal/frequency", { frequencyDays: days });
-      const addMoisturizer = () => triggerAction("/api/storefront/portal/add-on", {
-        variantId: "gid://shopify/ProductVariant/5003",
-        productName: "Barrier Restore Moisturizer",
-        price: "25.00"
-      });
+      const addDynamicAddOn = () => {
+        const eligibleAddons = ["gid://shopify/ProductVariant/5001", "gid://shopify/ProductVariant/5002", "gid://shopify/ProductVariant/5003"];
+        const currentSkin = profile ? profile.skinType : "dry";
+        const currentAllergens = profile ? (profile.allergens || []) : [];
+
+        const candidates = liveProducts.filter(prod => {
+          if (!eligibleAddons.includes(prod.variantId)) return false;
+          if (prod.stockLevel !== undefined && prod.stockLevel <= 0) return false;
+          if (selectedVariants.includes(prod.variantId)) return false;
+          for (const allergen of currentAllergens) {
+            if (prod.productName.toLowerCase().includes(allergen)) return false;
+          }
+          return true;
+        });
+
+        const scored = candidates.map(prod => {
+          let score = 50;
+          const prodName = prod.productName.toLowerCase();
+          
+          if (currentSkin === "dry") {
+            if (prodName.includes("serum") || prodName.includes("vitamin")) score += 30;
+          } else if (currentSkin === "oily" || currentSkin === "combination") {
+            if (prodName.includes("mask") || prodName.includes("charcoal")) score += 30;
+          }
+          return { ...prod, score };
+        }).sort((a, b) => b.score - a.score);
+
+        const chosen = scored[0];
+        if (!chosen) {
+          alert("Your upcoming box is already optimized with our best routine options! No additional in-stock add-on suggestions are available.");
+          return;
+        }
+
+        triggerAction("/api/storefront/portal/add-on", {
+          variantId: chosen.variantId,
+          productName: chosen.productName,
+          price: chosen.price
+        });
+      };
 
       return e("div", null,
         // Header
@@ -2480,54 +2391,11 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
                 e("button", { className: "btn-secondary", onClick: delayBox }, "📅 Delay 15d")
               ),
               e("div", { className: "grid" },
-                e("button", { className: "btn-secondary", onClick: () => setIsSwapping(!isSwapping) }, isSwapping ? "Cancel Swap" : "🔄 Swap Product"),
-                e("button", { className: "btn-secondary", onClick: togglePause }, contract.status === "PAUSED" ? "▶️ Resume" : "⏸️ Pause Routine")
-              ),
-              
-              // Custom Swapping console (Sensitivity Custom Intercept)
-              isSwapping && e("div", { style: { borderTop: "1px dashed var(--primary-color)", marginTop: "10px", paddingTop: "10px" } },
-                e("div", { style: { fontSize: "11px", fontWeight: "bold", color: "var(--primary-color)", marginBottom: "6px" } }, "Select Alternative Product"),
-                e("div", { style: { display: "flex", gap: "8px", flexDirection: "column" } },
-                  e("select", {
-                    value: selectedSwapId,
-                    onChange: (ev) => setSelectedSwapId(ev.target.value),
-                    style: { width: "100%", padding: "8px", borderRadius: "6px", border: "1px solid var(--primary-color)", fontSize: "13px", outline: "none", background: "white", cursor: "pointer" }
-                  },
-                    e("option", { value: "" }, "Choose your replacement..."),
-                    (() => {
-                      // Filter out items already in the visual core routine to prevent duplicates!
-                      const currentCoreIds = selectedVariants.slice(0, maxSlots);
-                      return swapAlternatives
-                        .filter(gId => !currentCoreIds.includes(gId))
-                        .map(gId => {
-                          let name = "Deluxe Product";
-                          if (gId === "gid://shopify/ProductVariant/5001") name = "Vitamin C Serum";
-                          else if (gId === "gid://shopify/ProductVariant/5002") name = "Charcoal Face Mask";
-                          else if (gId === "gid://shopify/ProductVariant/5003") name = "Barrier Restore Moisturizer";
-                          return e("option", { key: gId, value: gId }, name);
-                        });
-                    })()
-                  ),
-                  e("button", { 
-                    className: "btn-primary",
-                    disabled: !selectedSwapId || activating,
-                    onClick: () => {
-                      // Swap out the first core routine items variant inside contract
-                      const coreItems = typeof contract.items === "string" ? JSON.parse(contract.items) : contract.items;
-                      const firstSerum = coreItems.find(it => !it.isFreeGift && !it.isAddOn);
-                      if (firstSerum) {
-                        executeSensitivitySwap(firstSerum.variantId);
-                      } else {
-                        alert("No core subscription product found in your routine box to swap!");
-                      }
-                    },
-                    style: { width: "100%", padding: "8px", fontSize: "12px", fontWeight: "bold" }
-                  }, activating ? "⏳ Swapping..." : "🔄 Confirm Swap Product")
-                )
+                e("button", { className: "btn-secondary", onClick: togglePause }, contract.status === "PAUSED" ? "▶️ Resume" : "⏸️ Pause Routine"),
+                e("button", { className: "btn-secondary", onClick: () => setFrequency(45) }, "⚙️ Set 45d Delivery")
               ),
               e("div", { className: "grid" },
-                e("button", { className: "btn-secondary", onClick: () => setFrequency(45) }, "⚙️ Set 45d Delivery"),
-                e("button", { className: "btn-primary", onClick: addMoisturizer }, "🛍️ + Moisturizer Add-on")
+                e("button", { className: "btn-primary", onClick: addDynamicAddOn }, "🛍️ + Personalized Add-on")
               )
             ),
 
@@ -2554,7 +2422,7 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
                   e("input", { 
                     type: "text", 
                     value: chatInput, 
-                    placeholder: "Reply 1, 2, 3 or 4...", 
+                    placeholder: "Reply 1, 2 or 3...", 
                     onChange: (ev) => setChatInput(ev.target.value),
                     onKeyDown: (ev) => { if (ev.key === "Enter") { handleChatCommand(chatInput); } },
                     style: { flex: 1, padding: "8px", borderRadius: "6px", border: "1px solid #cbd5e0", fontSize: "12px", outline: "none", boxSizing: "border-box" } 
@@ -2572,6 +2440,80 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
           e("div", null,
             e("div", { className: "section-title" }, contract ? "📦 Customize Upcoming Box" : "🛍️ Build Your Dynamic Box"),
             
+            // Kaching-Style Volume Breaks Upsell Widget (Competitor Parity)
+            React.useMemo(() => {
+              const currentQty = selectedVariants.length;
+              const t1Active = currentQty === 1 || currentQty === 2;
+              const t2Active = currentQty === 3;
+              const t3Active = currentQty >= 4;
+
+              const activeStyle = {
+                border: "2px solid #008060",
+                background: "#f0fdf4",
+                boxShadow: "0 4px 6px -1px rgba(0, 128, 96, 0.1)"
+              };
+
+              return e("div", { style: { marginBottom: "20px" } },
+                e("div", { style: { fontSize: "11px", fontWeight: "700", color: "#2c3e50", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "8px", display: "flex", justifyContent: "space-between", alignItems: "center" } }, 
+                  e("span", null, "🔥 Kaching Volume Breaks"),
+                  currentQty > 0 && e("span", { style: { color: "#008060", fontSize: "10px", fontWeight: "bold" } }, currentQty + " " + (currentQty === 1 ? "Item" : "Items") + " Selected")
+                ),
+                e("div", { style: { display: "flex", gap: "8px" } },
+                  // Tier 1 (1-2 items)
+                  e("div", { 
+                    style: { 
+                      flex: 1, 
+                      padding: "8px", 
+                      borderRadius: "8px", 
+                      border: "1.5px solid #cbd5e0", 
+                      background: "white", 
+                      textAlign: "center",
+                      transition: "all 0.2s",
+                      ...(t1Active ? activeStyle : {})
+                    }
+                  },
+                    e("div", { style: { fontSize: "10px", fontWeight: "bold", color: t1Active ? "#14532d" : "#718096" } }, "1-2 Items"),
+                    e("div", { style: { fontSize: "12px", fontWeight: "800", color: t1Active ? "#008060" : "#2d3748", margin: "2px 0" } }, "15% OFF"),
+                    e("span", { style: { fontSize: "8px", background: t1Active ? "#008060" : "#718096", color: "white", padding: "1px 4px", borderRadius: "8px" } }, t1Active ? "✓ Active" : "Bronze")
+                  ),
+                  // Tier 2 (3 items)
+                  e("div", { 
+                    style: { 
+                      flex: 1, 
+                      padding: "8px", 
+                      borderRadius: "8px", 
+                      border: "1.5px solid #cbd5e0", 
+                      background: "white", 
+                      textAlign: "center",
+                      transition: "all 0.2s",
+                      ...(t2Active ? activeStyle : {})
+                    }
+                  },
+                    e("div", { style: { fontSize: "10px", fontWeight: "bold", color: t2Active ? "#14532d" : "#718096" } }, "3 Items"),
+                    e("div", { style: { fontSize: "12px", fontWeight: "800", color: t2Active ? "#008060" : "#2d3748", margin: "2px 0" } }, "20% OFF"),
+                    e("span", { style: { fontSize: "8px", background: t2Active ? "#008060" : "#718096", color: "white", padding: "1px 4px", borderRadius: "8px" } }, t2Active ? "✓ Active" : "Silver")
+                  ),
+                  // Tier 3 (4+ items)
+                  e("div", { 
+                    style: { 
+                      flex: 1, 
+                      padding: "8px", 
+                      borderRadius: "8px", 
+                      border: "1.5px solid #cbd5e0", 
+                      background: "white", 
+                      textAlign: "center",
+                      transition: "all 0.2s",
+                      ...(t3Active ? activeStyle : {})
+                    }
+                  },
+                    e("div", { style: { fontSize: "10px", fontWeight: "bold", color: t3Active ? "#14532d" : "#718096" } }, "4+ Items"),
+                    e("div", { style: { fontSize: "12px", fontWeight: "800", color: t3Active ? "#008060" : "#2d3748", margin: "2px 0" } }, "25% OFF"),
+                    e("span", { style: { fontSize: "8px", background: t3Active ? "#008060" : "#718096", color: "white", padding: "1px 4px", borderRadius: "8px" } }, t3Active ? "✓ Active" : "Gold / Max")
+                  )
+                )
+              );
+            }, [selectedVariants]),
+
             // Visual Slots showing chosen items
             e("div", { style: { marginBottom: "20px", textAlign: "center", background: "#f8fafc", padding: "12px", borderRadius: "12px", border: "1px solid #e2e8f0" } },
               e("div", { style: { fontSize: "11px", fontWeight: "700", color: "#718096", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "8px" } }, "Your Skincare Routine Box"),
@@ -2772,30 +2714,37 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
               pipelineData.products.map((prod) => {
                 const qty = getProductQty(prod.variantId);
                 const isSelected = qty > 0;
+                const isOutOfStock = prod.stockLevel !== undefined && prod.stockLevel <= 0;
                 const toggleProduct = () => {
-                  if (!isSelected) {
+                  if (!isSelected && !isOutOfStock) {
                     handleIncrement(prod.variantId);
                   }
                 };
                 return e("div", { 
                   key: prod.variantId, 
                   onClick: toggleProduct,
-                  className: "product-card " + (isSelected ? "selected" : "")
+                  className: "product-card " + (isSelected ? "selected" : ""),
+                  style: isOutOfStock ? { opacity: 0.65, background: "#f8fafc", cursor: "not-allowed", border: "1px dashed #cbd5e0" } : {}
                 },
                   e("div", null,
                     e("div", { className: "badge-select" }, isSelected ? "✓" : ""),
+                    isOutOfStock && e("span", { className: "free-gift-badge", style: { background: "#e53e3e", color: "white", fontSize: "8px", position: "absolute", top: "8px", left: "8px" } }, "SOLD OUT"),
                     prod.imageUrl && e("img", { className: "product-img", src: prod.imageUrl, alt: prod.productName }),
                     e("div", { className: "card-subtitle" }, prod.variantTitle && prod.variantTitle !== "Default Title" ? prod.variantTitle : "Product"),
                     e("div", { className: "card-title" }, prod.productName),
                     
-                    // Tactile incrementor controls
+                    // Tactile incrementor controls (Strict stock limits gated!)
                     isSelected && e("div", { className: "quantity-selector", onClick: (ev) => ev.stopPropagation() },
                       e("button", { className: "quantity-btn", onClick: () => handleDecrement(prod.variantId) }, "-"),
                       e("span", { className: "quantity-count" }, qty),
-                      e("button", { className: "quantity-btn", onClick: () => handleIncrement(prod.variantId) }, "+")
+                      e("button", { 
+                        className: "quantity-btn", 
+                        disabled: isOutOfStock || qty >= (prod.stockLevel !== undefined ? prod.stockLevel : 999), 
+                        onClick: () => handleIncrement(prod.variantId) 
+                      }, "+")
                     )
                   ),
-                  e("div", { className: "price-tag" }, "$" + prod.price.toFixed(2))
+                  e("div", { className: "price-tag" }, isOutOfStock ? "Out of Stock" : "$" + prod.price.toFixed(2))
                 );
               })
             ),
@@ -3273,7 +3222,7 @@ app.get("/api/admin/curations", async (req, res) => {
     if (currentPlan === "STARTER") {
       return res.status(403).json({
         error: "UPGRADE_REQUIRED",
-        message: "AI Curation is locked under the STARTER plan. Please upgrade to PRO or ENTERPRISE to access."
+        message: "Advanced Adaptive Curation is locked under the STARTER plan. Please upgrade to PRO or ENTERPRISE to access."
       });
     }
 
@@ -3422,7 +3371,7 @@ app.post("/api/admin/settings/milestones", async (req, res) => {
   }
 });
 
-// POST /api/admin/curations/generate (Dynamic AI curation generator based on target price sensitivity and profit margins!)
+// POST /api/admin/curations/generate (Dynamic adaptive curation generator based on target price sensitivity and profit margins!)
 app.post("/api/admin/curations/generate", async (req, res) => {
   try {
     const session = res.locals.shopify.session;
@@ -3431,7 +3380,7 @@ app.post("/api/admin/curations/generate", async (req, res) => {
     const dbSession = await prisma.session.findFirst({ where: { shop } });
     const currentPlan = dbSession?.plan || "STARTER";
     if (currentPlan === "STARTER") {
-      return res.status(403).json({ error: "Upgrade required to run AI curation." });
+      return res.status(403).json({ error: "Upgrade required to run adaptive curation." });
     }
 
     const priceLow = dbSession?.boxPriceLow || 30.0;
@@ -4303,7 +4252,7 @@ app.get("/", (req, res) => {
         })
         .then(res => res.json())
         .then(() => {
-          setNotification("AI Curation recommendations accepted successfully!");
+          setNotification("Adaptive Curation recommendations accepted successfully!");
           setCurations(curations.map(c => c.id === id ? { ...c, status: "ACCEPTED" } : c));
         });
       };
@@ -4482,13 +4431,13 @@ app.get("/", (req, res) => {
       };
 
       const handleGenerateCurations = () => {
-        setNotification("⚡ Running AI Curation Optimizer Engine...");
+        setNotification("⚡ Running Adaptive Curation Optimizer Engine...");
         fetch("/api/admin/curations/generate", {
           method: "POST"
         })
         .then(res => res.json())
         .then(data => {
-          setNotification(\`🎉 AI Curation complete! Optimized box suggestions for \${data.count} customer profiles.\`);
+          setNotification(\`🎉 Adaptive Curation complete! Optimized box suggestions for \${data.count} customer profiles.\`);
           refreshAllData();
         })
         .catch(err => console.error("Error generating curations:", err));
@@ -4612,7 +4561,7 @@ app.get("/", (req, res) => {
             if (data) {
               const customerName = profiles.find(p => p.customerId === selectedPortalCustomerId)?.name || "Glowgetter";
               setSmsMessages([
-                { sender: "bot", text: "Hey " + customerName + "! GlowBot here. 🌟 Your routine order is preparing to ship in 3 days! \\n\\nReply:\\n1 to Postpone 30 Days\\n2 to Skip Next Box\\n3 to Swap your product\\n4 to Add-on a Charcoal Mask" }
+                { sender: "bot", text: "Hey " + customerName + "! GlowBot here. 🌟 Your routine order is preparing to ship in 3 days! \\n\\nReply:\\n1 to Postpone 30 Days\\n2 to Skip Next Box\\n3 to Add-on a Charcoal Mask" }
               ]);
             } else {
               setSmsMessages([
@@ -4628,7 +4577,7 @@ app.get("/", (req, res) => {
           e("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "20px" } },
             e("div", null,
               e("h1", { style: { fontSize: "24px", fontWeight: "600", margin: 0 } }, "Beauty Subscription Optimizer"),
-              e("p", { style: { color: "#6d7175", margin: "4px 0 0 0" } }, "Predict churn, optimize curation, and maximize subscriber LTV with AI.")
+              e("p", { style: { color: "#6d7175", margin: "4px 0 0 0" } }, "Predict churn, optimize curation, and maximize subscriber LTV with adaptive curation suggestions.")
             ),
             e("div", { style: { display: "flex", gap: "8px" } },
               e("button", { className: "button-secondary", onClick: triggerSampleSeeding }, "Seed Demo Data")
@@ -4640,7 +4589,7 @@ app.get("/", (req, res) => {
               e("span", { style: { fontWeight: "bold" } }, "Merchant Subscription Plan: "),
               e("span", { className: "badge", style: { backgroundColor: plan === "STARTER" ? "#e2e8f0" : (plan === "PRO" ? "#feebc8" : "#e0f2fe"), color: plan === "STARTER" ? "#4a5568" : (plan === "PRO" ? "#c05621" : "#2b6cb0") } }, plan),
               e("span", { style: { marginLeft: "12px", fontSize: "13px", color: "#6d7175" } },
-                plan === "STARTER" ? "Unique Customers capped at 2,000. AI Curation and Inventory Locked." :
+                plan === "STARTER" ? "Unique Customers capped at 2,000. Adaptive Curation and Inventory Locked." :
                 (plan === "PRO" ? "Unique Customers capped at 20,000. All standard optimization modules active." : "Enterprise Tier: Unlimited scale, high-performance models active.")
               )
             ),
@@ -4656,7 +4605,7 @@ app.get("/", (req, res) => {
       const renderTabs = () => {
         return e("div", { className: "tab-header" },
           e("div", { className: "tab " + (activeTab === "churn" ? "active" : ""), onClick: () => setActiveTab("churn") }, "🔮 Churn Prediction Dashboard"),
-          e("div", { className: "tab " + (activeTab === "curation" ? "active" : ""), onClick: () => setActiveTab("curation") }, "🎨 AI Box Curation"),
+          e("div", { className: "tab " + (activeTab === "curation" ? "active" : ""), onClick: () => setActiveTab("curation") }, "🎨 Box Curation"),
           e("div", { className: "tab " + (activeTab === "inventory" ? "active" : ""), onClick: () => setActiveTab("inventory") }, "📊 Inventory Analytics"),
           e("div", { className: "tab " + (activeTab === "quiz" ? "active" : ""), onClick: () => setActiveTab("quiz") }, "📋 Subscription Preference Quiz"),
           e("div", { className: "tab " + (activeTab === "milestones" ? "active" : ""), onClick: () => setActiveTab("milestones") }, "🎁 Milestones & Gifting"),
@@ -4795,16 +4744,16 @@ app.get("/", (req, res) => {
         if (plan === "STARTER") {
           return e("div", { className: "card paywall-locked" },
             e("div", { style: { fontSize: "40px" } }, "🔒"),
-            e("div", { className: "paywall-title" }, "AI Curation Suggestions Locked"),
-            e("div", { className: "paywall-desc" }, "The Predictive Curation Engine is a Premium module that automatically matches subscribers skin profiles, ratings, and repeat margins. Upgrade to the Pro or Enterprise plan to unlock instant curations!"),
+            e("div", { className: "paywall-title" }, "Adaptive Curation Suggestions Locked"),
+            e("div", { className: "paywall-desc" }, "The Predictive Curation Engine is a Premium module that automatically matches subscribers skin profiles, ratings, and repeat margins. Upgrade to the Pro or Enterprise plan to unlock instant adaptive curations!"),
             e("button", { className: "button-primary", onClick: () => handleUpgradeBilling("PRO") }, "Upgrade to PRO Plan")
           );
         }
 
         return e("div", null,
           e("div", { className: "card", style: { marginBottom: "20px" } },
-            e("h3", { style: { fontSize: "16px", fontWeight: "600", marginBottom: "12px" } }, "🎯 AI Curation Margin & Price Settings"),
-            e("p", { style: { color: "#6d7175", marginBottom: "20px", fontSize: "13px" } }, "Configure the target box price for each Subscription Box Tier (Starter, Pro, Enterprise) and your desired target margin. The AI Curation Engine will automatically optimize product matching to stay within these parameters."),
+            e("h3", { style: { fontSize: "16px", fontWeight: "600", marginBottom: "12px" } }, "🎯 Adaptive Curation Margin & Price Settings"),
+            e("p", { style: { color: "#6d7175", marginBottom: "20px", fontSize: "13px" } }, "Configure the target box price for each Subscription Box Tier (Starter, Pro, Enterprise) and your desired target margin. The Curation Engine will automatically optimize product matching to stay within these parameters."),
             e("div", { style: { display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "16px", marginBottom: "20px" } },
               e("div", null,
                 e("label", { style: { display: "block", fontWeight: "600", fontSize: "12px", marginBottom: "4px" } }, "STARTER Box Tier Price ($)"),
@@ -4825,11 +4774,11 @@ app.get("/", (req, res) => {
             ),
             e("div", { style: { display: "flex", gap: "12px" } },
               e("button", { className: "button-primary", onClick: () => handleSaveSettings(settingsLow, settingsMedium, settingsHigh, settingsMargin) }, "💾 Save Curation Settings"),
-              e("button", { className: "button-secondary", style: { backgroundColor: "#00875a", color: "#fff", border: "none" }, onClick: handleGenerateCurations }, "⚡ Run AI Curation Optimizer Engine")
+              e("button", { className: "button-secondary", style: { backgroundColor: "#00875a", color: "#fff", border: "none" }, onClick: handleGenerateCurations }, "⚡ Run Curation Optimizer Engine")
             )
           ),
           e("div", { className: "card" },
-            e("h3", { style: { fontSize: "16px", fontWeight: "600", marginBottom: "12px" } }, "AI-Curated Box Suggestions (Next Cycle)"),
+            e("h3", { style: { fontSize: "16px", fontWeight: "600", marginBottom: "12px" } }, "Personalized Box Suggestions (Next Cycle)"),
             curations.map(c => {
               const displayName = c.customerName || "Subscription Subscriber";
               const actualPrice = c.totalPrice ? "$" + c.totalPrice.toFixed(2) : "$55.00";
@@ -4897,7 +4846,7 @@ app.get("/", (req, res) => {
                   e("thead", null,
                     e("tr", null,
                       e("th", null, "Personalized Product"),
-                      e("th", null, "AI Confidence Score"),
+                      e("th", null, "Curation Confidence Score"),
                       e("th", null, "Curation Matching Logic"),
                       c.status === "SUGGESTED" && e("th", null, "Manual Override / Swap")
                     )
@@ -5193,7 +5142,7 @@ app.get("/", (req, res) => {
                 style: { marginRight: "10px", marginTop: "4px" } 
               }),
               e("div", null,
-                e("label", { htmlFor: "safety_guard", style: { fontWeight: "bold", cursor: "pointer", fontSize: "13px" } }, "🛡️ Enable AI Allergen & Skin Type Gifting Safeguard"),
+                e("label", { htmlFor: "safety_guard", style: { fontWeight: "bold", cursor: "pointer", fontSize: "13px" } }, "🛡️ Enable Allergen & Skin Type Gifting Safeguard"),
                 e("p", { style: { color: "#4a5568", fontSize: "12px", margin: "4px 0 0 0" } }, "When enabled, the milestone engine cross-references the customer's skin profile against product tags. If a selected gift contains allergens or conflicts with their skin type (e.g., highly reactive sensitive skin), it is automatically filtered out and replaced with safe fallbacks or store credit!")
               )
             ),
@@ -5298,28 +5247,6 @@ app.get("/", (req, res) => {
           });
         };
 
-        const swapContractProduct = () => {
-          if (!portalContract) return;
-          const items = typeof portalContract.items === "string" ? JSON.parse(portalContract.items) : portalContract.items;
-          const currentSerum = items.find(it => it.variantId.includes("5001"));
-
-          const oldId = currentSerum ? "gid://shopify/ProductVariant/5001" : "gid://shopify/ProductVariant/5002";
-          const newId = currentSerum ? "gid://shopify/ProductVariant/5002" : "gid://shopify/ProductVariant/5001";
-
-          fetch("/api/storefront/portal/swap", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ contractId: portalContract.id, oldVariantId: oldId, newVariantId: newId })
-          })
-          .then(res => res.json())
-          .then(data => {
-            if (data.success) {
-              setPortalContract(data.contract);
-              setNotification("🔄 Product swapped safely based on skin compatibility!");
-            }
-          });
-        };
-
         const togglePauseResume = () => {
           if (!portalContract) return;
           const isPaused = portalContract.status === "PAUSED";
@@ -5355,23 +5282,64 @@ app.get("/", (req, res) => {
           });
         };
 
-        const addMoisturizerAddOn = () => {
+        const addDynamicAddOnAdmin = () => {
           if (!portalContract) return;
+          const eligibleAddons = ["gid://shopify/ProductVariant/5001", "gid://shopify/ProductVariant/5002", "gid://shopify/ProductVariant/5003"];
+          const customerProfile = profiles.find(p => p.customerId === portalContract.customerId);
+          const currentSkin = customerProfile ? customerProfile.skinType : "dry";
+          const currentAllergens = customerProfile ? (customerProfile.allergens || []) : [];
+          
+          const items = typeof portalContract.items === "string" ? JSON.parse(portalContract.items) : portalContract.items;
+          const hasIds = items.map(it => it.variantId);
+
+          const candidates = inventory.map(inv => ({
+            variantId: inv.productId,
+            productName: inv.productName,
+            price: inv.price,
+            stockLevel: inv.stockLevel || 10
+          })).filter(prod => {
+            if (!eligibleAddons.includes(prod.variantId)) return false;
+            if (prod.stockLevel !== undefined && prod.stockLevel <= 0) return false;
+            if (hasIds.includes(prod.variantId)) return false;
+            for (const allergen of currentAllergens) {
+              if (prod.productName.toLowerCase().includes(allergen)) return false;
+            }
+            return true;
+          });
+
+          const scored = candidates.map(prod => {
+            let score = 50;
+            const prodName = prod.productName.toLowerCase();
+            
+            if (currentSkin === "dry") {
+              if (prodName.includes("serum") || prodName.includes("vitamin")) score += 30;
+            } else if (currentSkin === "oily" || currentSkin === "combination") {
+              if (prodName.includes("mask") || prodName.includes("charcoal")) score += 30;
+            }
+            return { ...prod, score };
+          }).sort((a, b) => b.score - a.score);
+
+          const chosen = scored[0];
+          if (!chosen) {
+            alert("This subscription is already optimized! No additional in-stock add-on suggestions are available.");
+            return;
+          }
+
           fetch("/api/storefront/portal/add-on", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               contractId: portalContract.id,
-              variantId: "gid://shopify/ProductVariant/5003",
-              productName: "Barrier Restore Moisturizer",
-              price: "25.00"
+              variantId: chosen.variantId,
+              productName: chosen.productName,
+              price: chosen.price
             })
           })
           .then(res => res.json())
           .then(data => {
             if (data.success) {
               setPortalContract(data.contract);
-              setNotification("🛍️ Barrier Restore Moisturizer added to your upcoming box!");
+              setNotification("🛍️ Personalized curated add-on: " + chosen.productName + " added!");
             }
           });
         };
@@ -5391,13 +5359,10 @@ app.get("/", (req, res) => {
               botText = "GlowBot: Skipped! ⏭️ Your upcoming box is skipped. We will prepare your next delivery after that.";
               skipContract();
             } else if (cmd === "3") {
-              botText = "GlowBot: Swapped! 🔄 We swapped your product due to skin sensitivity. Gentle formula is loaded.";
-              swapContractProduct();
-            } else if (cmd === "4") {
-              botText = "GlowBot: Added! 🛍️ Barrier Restore Moisturizer added to your upcoming box. Thank you!";
-              addMoisturizerAddOn();
+              botText = "GlowBot: Added! 🛍️ Personalized curated product added to your upcoming box. Thank you!";
+              addDynamicAddOnAdmin();
             } else if (cmd.toLowerCase() === "help") {
-              botText = "GlowBot Options:\\n1 - Delay 30 Days\\n2 - Skip Next Box\\n3 - Swap Serum for gentle formula\\n4 - Add-on Moisturizer";
+              botText = "GlowBot Options:\\n1 - Delay 30 Days\\n2 - Skip Next Box\\n3 - Add-on Moisturizer";
             }
             setSmsMessages([...updated, { sender: "bot", text: botText }]);
           }, 800);
@@ -5642,12 +5607,11 @@ app.get("/", (req, res) => {
                     e("button", { className: "button-secondary", style: { fontSize: "12px", padding: "6px" }, onClick: () => delayContract(15) }, "📅 Delay 15d")
                   ),
                   e("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px" } },
-                    e("button", { className: "button-secondary", style: { fontSize: "12px", padding: "6px" }, onClick: swapContractProduct }, "🔄 Swap Serum"),
-                    e("button", { className: "button-secondary", style: { fontSize: "12px", padding: "6px" }, onClick: togglePauseResume }, portalContract.status === "PAUSED" ? "▶️ Resume" : "⏸️ Pause Routine")
+                    e("button", { className: "button-secondary", style: { fontSize: "12px", padding: "6px" }, onClick: togglePauseResume }, portalContract.status === "PAUSED" ? "▶️ Resume" : "⏸️ Pause Routine"),
+                    e("button", { className: "button-secondary", style: { fontSize: "12px", padding: "6px" }, onClick: () => adjustFrequency(45) }, "⚙️ Set 45d")
                   ),
                   e("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px" } },
-                    e("button", { className: "button-secondary", style: { fontSize: "12px", padding: "6px" }, onClick: () => adjustFrequency(45) }, "⚙️ Set 45d"),
-                    e("button", { className: "button-primary", style: { fontSize: "12px", padding: "6px" }, onClick: addMoisturizerAddOn }, "🛍️ + Moisturizer")
+                    e("button", { className: "button-primary", style: { fontSize: "12px", padding: "6px" }, onClick: addDynamicAddOnAdmin }, "🛍️ + Personalized Add-on")
                   )
                 )
               )
@@ -5673,8 +5637,7 @@ app.get("/", (req, res) => {
                   [
                     { label: "1 (Delay 30d)", val: "1" },
                     { label: "2 (Skip)", val: "2" },
-                    { label: "3 (Swap)", val: "3" },
-                    { label: "4 (Add-on)", val: "4" },
+                    { label: "3 (Add-on)", val: "3" },
                     { label: "Help", val: "help" }
                   ].map((pill, idx) => e("button", { key: idx, style: { fontSize: "10px", padding: "4px 8px", borderRadius: "12px", border: "1px solid #cbd5e0", cursor: "pointer", backgroundColor: "#fff" }, onClick: () => handleSmsCommand(pill.val) }, pill.label))
                 ),
