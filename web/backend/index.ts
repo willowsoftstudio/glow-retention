@@ -1526,25 +1526,7 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
       const [claimingGift, setClaimingGift] = React.useState(false);
 
       // Unified selectedVariants state (flat array representing items, supporting duplicate quantity counting)
-      const [selectedVariants, setSelectedVariants] = React.useState(() => {
-        if (contract) {
-          try {
-            const itemsList = typeof contract.items === "string" ? JSON.parse(contract.items) : contract.items;
-            const vList = [];
-            itemsList.forEach(it => {
-              if (it.isFreeGift) return; // exclude free sample gift from active visual builder edits
-              const qty = it.quantity || 1;
-              for (let i = 0; i < qty; i++) {
-                vList.push(it.variantId);
-              }
-            });
-            return vList;
-          } catch(e) {
-            return [];
-          }
-        }
-        return [];
-      });
+      const [selectedVariants, setSelectedVariants] = React.useState([]);
 
       const [routineFrequency, setRoutineFrequency] = React.useState(() => {
         return contract ? contract.frequencyDays : 30;
