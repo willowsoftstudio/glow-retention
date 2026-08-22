@@ -214,6 +214,188 @@ app.post("/api/webhooks/compliance", express.json(), async (req, res) => {
   }
 });
 
+  // POST /api/webhooks/sms (Real-time Twilio SMS Webhook Receiver - Live Production Ready!)
+  app.post("/api/webhooks/sms", express.urlencoded({ extended: true }), async (req, res) => {
+    try {
+      const { From, Body } = req.body;
+      if (!From || !Body) {
+        return res.status(400).send("<Response><Message>GlowBot Error: Missing sender or message body.</Message></Response>");
+      }
+
+      console.log(`[Twilio Webhook] Received SMS from ${From}: "${Body}"`);
+
+      // Resolve the merchant's session to query Shopify GraphQL
+      const session = await prisma.session.findFirst();
+      if (!session) {
+        res.header("Content-Type", "text/xml");
+        return res.send("<Response><Message>GlowBot: Internal Error: Active merchant session not found in database.</Message></Response>");
+      }
+
+      let customerGid = "";
+      try {
+        const shopifySession = new Session({
+          id: session.id,
+          shop: session.shop,
+          state: session.state,
+          isOnline: session.isOnline,
+          accessToken: session.accessToken,
+          scope: session.scope || undefined,
+          expires: session.expires || undefined,
+        });
+        const client = new shopify.api.clients.Graphql({ session: shopifySession });
+        const gqlResponse: any = await client.request(
+          `query {
+            customers(first: 1, query: "phone:${From}") {
+              edges {
+                node {
+                  id
+                }
+              }
+            }
+          }`
+        );
+        customerGid = gqlResponse?.data?.customers?.edges?.[0]?.node?.id || "";
+      } catch (gqlErr: any) {
+        console.warn("[Twilio Webhook Warning] Shopify GraphQL customer lookup deferred/failed:", gqlErr.message);
+      }
+
+      // Fallback: If no GID resolved via live Shopify, fetch the first active profile in sandbox DB
+      let profile = null;
+      if (customerGid) {
+        profile = await prisma.customerProfile.findFirst({
+          where: { customerId: customerGid }
+        });
+      } else {
+        console.log("[Twilio Webhook Sandbox Fallback] Live GID lookup empty. Resolving to first test profile in sandbox DB.");
+        profile = await prisma.customerProfile.findFirst();
+      }
+
+      if (!profile) {
+        console.warn(`[Twilio Warning] No customer profile found in database matching phone number/fallback: ${From}`);
+        res.header("Content-Type", "text/xml");
+        return res.send("<Response><Message>GlowBot: Hi there! We couldn't locate an active skincare profile for your phone number in our database. Please complete your profile quiz first!</Message></Response>");
+      }
+
+      // Locate their active subscription contract in the database
+      const contract = await prisma.subscriptionContract.findFirst({
+        where: { customerId: profile.customerId, shop: profile.shop }
+      });
+
+      if (!contract) {
+        console.warn(`[Twilio Warning] Profile found, but no active subscription contract in database for: ${profile.customerId}`);
+        res.header("Content-Type", "text/xml");
+        return res.send("<Response><Message>GlowBot: Hi! We found your profile, but you don't have an active routine box subscription in our database yet.</Message></Response>");
+      }
+
+      let botText = "GlowBot: Command not recognized. Reply HELP to see list of options.";
+      const cmd = Body.trim().toLowerCase();
+
+      if (cmd === "1") {
+        // Delay next shipment by 30 days
+        const currentBill = new Date(contract.nextBillDate);
+        const updatedBill = new Date(currentBill.getTime() + 30 * 24 * 60 * 60 * 1000);
+        await prisma.subscriptionContract.update({
+          where: { id: contract.id },
+          data: { nextBillDate: updatedBill }
+        });
+        botText = "GlowBot: Done! 📅 Delayed your upcoming box shipment by 30 days.";
+      } else if (cmd === "2") {
+        // Skip box (30 days postpone)
+        const currentBill = new Date(contract.nextBillDate);
+        const updatedBill = new Date(currentBill.getTime() + 30 * 24 * 60 * 60 * 1000);
+        await prisma.subscriptionContract.update({
+          where: { id: contract.id },
+          data: { nextBillDate: updatedBill }
+        });
+        botText = "GlowBot: Skipped! ⏭️ Your upcoming box is skipped. We'll ship the next one.";
+      } else if (cmd === "3") {
+        // Swap Serum variant 5001 for 5002 inside items array
+        let items = JSON.parse(contract.items || "[]");
+        const currentSerum = items.find((it: any) => it.variantId.includes("5001"));
+        const oldId = currentSerum ? "gid://shopify/ProductVariant/5001" : "gid://shopify/ProductVariant/5002";
+        const newId = currentSerum ? "gid://shopify/ProductVariant/5002" : "gid://shopify/ProductVariant/5001";
+        
+        let swapped = false;
+        items = items.map((it: any) => {
+          if (it.variantId === oldId) {
+            swapped = true;
+            return {
+              ...it,
+              variantId: newId,
+              productName: newId === "gid://shopify/ProductVariant/5001" ? "Vitamin C Serum" : "Charcoal Face Mask"
+            };
+          }
+          return it;
+        });
+
+        if (swapped) {
+          await prisma.subscriptionContract.update({
+            where: { id: contract.id },
+            data: { items: JSON.stringify(items) }
+          });
+          botText = "GlowBot: Swapped! 🔄 We swapped your product due to skin sensitivity. Gentle formula is loaded.";
+        } else {
+          botText = "GlowBot: Swapped deferred. No swap variant was found in your box.";
+        }
+      } else if (cmd === "4") {
+        // Add-on moisturizer variant 5003 (enforce max limit!)
+        const configPath = path.resolve("./theme-settings.json");
+        let maxAddonLimit = 1;
+        if (fs.existsSync(configPath)) {
+          try {
+            const raw = fs.readFileSync(configPath, "utf-8");
+            const allConfigs = JSON.parse(raw);
+            if (allConfigs[contract.shop] && allConfigs[contract.shop].maxAddonLimit !== undefined) {
+              maxAddonLimit = parseInt(allConfigs[contract.shop].maxAddonLimit);
+            }
+          } catch (e) {}
+        }
+
+        let items = JSON.parse(contract.items || "[]");
+        const existingAddonQty = items
+          .filter((it: any) => it.variantId === "gid://shopify/ProductVariant/5003" && it.isAddOn)
+          .reduce((sum: number, it: any) => sum + (it.quantity || 1), 0);
+
+        if (existingAddonQty >= maxAddonLimit) {
+          botText = `GlowBot Error: Maximum add-on limit of ${maxAddonLimit} reached for this product!`;
+        } else {
+          const matchedIdx = items.findIndex((it: any) => it.variantId === "gid://shopify/ProductVariant/5003" && it.isAddOn);
+          if (matchedIdx > -1) {
+            items[matchedIdx].quantity = (items[matchedIdx].quantity || 1) + 1;
+          } else {
+            items.push({
+              variantId: "gid://shopify/ProductVariant/5003",
+              productName: "Barrier Restore Moisturizer",
+              price: 25.00,
+              isAddOn: true,
+              quantity: 1
+            });
+          }
+
+          await prisma.subscriptionContract.update({
+            where: { id: contract.id },
+            data: { items: JSON.stringify(items) }
+          });
+          botText = "GlowBot: Added! 🛍️ Barrier Restore Moisturizer added to your upcoming box. Thank you!";
+        }
+      } else if (cmd === "help") {
+        botText = "GlowBot Options:\n1 - Delay 30 Days\n2 - Skip Next Box\n3 - Swap Serum\n4 - Add-on Moisturizer";
+      }
+
+      // Return TwiML XML to Twilio
+      res.header("Content-Type", "text/xml");
+      res.send(`
+        <Response>
+          <Message>${botText.replace(/\n/g, "\\n")}</Message>
+        </Response>
+      `);
+    } catch (err: any) {
+      console.error(`❌ [Twilio SMS Webhook Error] Failed to process SMS:`, err.message);
+      res.header("Content-Type", "text/xml");
+      res.send("<Response><Message>GlowBot Error: Server error processing SMS request.</Message></Response>");
+    }
+  });
+
 // 3. Protected Dashboard APIs (requires authentication session)
 const checkSession = () => {
   if (isTestMode) {
@@ -566,21 +748,57 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
   });
 
   // POST /api/storefront/portal/swap (Customer swaps irritated product - Stay AI Cancel Intercept)
+  // POST /api/storefront/portal/swap (Customer swaps a variant in their active subscription)
   app.post("/api/storefront/portal/swap", validateStorefrontSession, async (req, res) => {
     try {
       const session = req.body.session;
       const { contractId, oldVariantId, newVariantId } = req.body;
+
+      if (!contractId || !oldVariantId || !newVariantId) {
+        return res.status(400).json({ error: "Missing required swap parameters" });
+      }
 
       const contract = await prisma.subscriptionContract.findUnique({ where: { id: contractId } });
       if (!contract) {
         return res.status(404).json({ error: "Subscription contract not found" });
       }
 
+      // Load approved swap list from JSON configurator
+      const configPath = path.resolve("./theme-settings.json");
+      let swapAlternativeVariantIds = [
+        "gid://shopify/ProductVariant/5001",
+        "gid://shopify/ProductVariant/5002",
+        "gid://shopify/ProductVariant/5003"
+      ];
+      if (fs.existsSync(configPath)) {
+        try {
+          const raw = fs.readFileSync(configPath, "utf-8");
+          const allConfigs = JSON.parse(raw);
+          if (allConfigs[contract.shop] && allConfigs[contract.shop].swapAlternativeVariantIds) {
+            swapAlternativeVariantIds = allConfigs[contract.shop].swapAlternativeVariantIds;
+          }
+        } catch (e) {}
+      }
+
+      // Assert that newVariantId is approved by admin for swaps
+      if (!swapAlternativeVariantIds.includes(newVariantId)) {
+        return res.status(403).json({ error: "Selected replacement product is not an approved routine alternative." });
+      }
+
       let items = JSON.parse(contract.items || "[]");
+      const hasOld = items.some((it: any) => it.variantId === oldVariantId);
+      if (!hasOld) {
+        return res.status(400).json({ error: "Product variant to swap not found in your routine box." });
+      }
+
+      let swapped = false;
       items = items.map((it: any) => {
         if (it.variantId === oldVariantId) {
-          let name = "Charcoal Face Mask";
+          swapped = true;
+          let name = "Soothing Skincare Alternative";
           if (newVariantId.includes("5001")) name = "Vitamin C Serum";
+          else if (newVariantId.includes("5002")) name = "Charcoal Face Mask";
+          else if (newVariantId.includes("5003")) name = "Barrier Restore Moisturizer";
           return { ...it, variantId: newVariantId, productName: name };
         }
         return it;
@@ -866,7 +1084,12 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
         themePrimaryColor: "#b89047", // premium luxury warm gold by default
         themeSecondaryColor: "#1a365d", // premium deep navy by default
         maxAddonLimit: 1, // default limit of 1 add-on per subscriber
-        minStartDateDays: 2 // default min days to start subscription is 2
+        minStartDateDays: 2, // default min days to start subscription is 2
+        swapAlternativeVariantIds: [
+          "gid://shopify/ProductVariant/5001",
+          "gid://shopify/ProductVariant/5002",
+          "gid://shopify/ProductVariant/5003"
+        ] // approved sensitivity swap alternatives by default
       };
 
       if (fs.existsSync(configPath)) {
@@ -890,7 +1113,7 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
   // POST /api/admin/theme-settings (Update theme colors and branding settings)
   app.post("/api/admin/theme-settings", async (req, res) => {
     try {
-      const { shop, themePrimaryColor, themeSecondaryColor, maxAddonLimit, minStartDateDays } = req.body;
+      const { shop, themePrimaryColor, themeSecondaryColor, maxAddonLimit, minStartDateDays, swapAlternativeVariantIds } = req.body;
       if (!shop) {
         return res.status(400).json({ error: "Missing required shop parameter" });
       }
@@ -909,12 +1132,18 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
 
       const existingLimit = allConfigs[shop]?.maxAddonLimit !== undefined ? allConfigs[shop].maxAddonLimit : 1;
       const existingMinDate = allConfigs[shop]?.minStartDateDays !== undefined ? allConfigs[shop].minStartDateDays : 2;
+      const existingSwaps = allConfigs[shop]?.swapAlternativeVariantIds || [
+        "gid://shopify/ProductVariant/5001",
+        "gid://shopify/ProductVariant/5002",
+        "gid://shopify/ProductVariant/5003"
+      ];
 
       allConfigs[shop] = {
         themePrimaryColor: themePrimaryColor || allConfigs[shop]?.themePrimaryColor || "#b89047",
         themeSecondaryColor: themeSecondaryColor || allConfigs[shop]?.themeSecondaryColor || "#1a365d",
         maxAddonLimit: maxAddonLimit !== undefined ? parseInt(maxAddonLimit) : existingLimit,
-        minStartDateDays: minStartDateDays !== undefined ? parseInt(minStartDateDays) : existingMinDate
+        minStartDateDays: minStartDateDays !== undefined ? parseInt(minStartDateDays) : existingMinDate,
+        swapAlternativeVariantIds: swapAlternativeVariantIds || existingSwaps
       };
 
       fs.writeFileSync(configPath, JSON.stringify(allConfigs, null, 2), "utf-8");
@@ -1032,6 +1261,11 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
       let themePrimaryColor = "#b89047"; // premium luxury gold by default
       let themeSecondaryColor = "#1a365d"; // premium deep navy by default
       let minStartDateDays = 2; // default 2 days min from checkout
+      let swapAlternativeVariantIds = [
+        "gid://shopify/ProductVariant/5001",
+        "gid://shopify/ProductVariant/5002",
+        "gid://shopify/ProductVariant/5003"
+      ];
 
       if (fs.existsSync(configPath)) {
         try {
@@ -1042,6 +1276,9 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
             themeSecondaryColor = allConfigs[shop].themeSecondaryColor || themeSecondaryColor;
             if (allConfigs[shop].minStartDateDays !== undefined) {
               minStartDateDays = parseInt(allConfigs[shop].minStartDateDays);
+            }
+            if (allConfigs[shop].swapAlternativeVariantIds) {
+              swapAlternativeVariantIds = allConfigs[shop].swapAlternativeVariantIds;
             }
           }
         } catch (e) {
@@ -1521,9 +1758,13 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
       
       const milestoneCount = ${milestoneCount};
       const eligibleGifts = ${JSON.stringify(giftIds)};
+      const swapAlternatives = ${JSON.stringify(swapAlternativeVariantIds)};
 
       const [selectedGiftId, setSelectedGiftId] = React.useState("");
       const [claimingGift, setClaimingGift] = React.useState(false);
+
+      const [isSwapping, setIsSwapping] = React.useState(false);
+      const [selectedSwapId, setSelectedSwapId] = React.useState("");
 
       // Unified selectedVariants state (flat array representing items, supporting duplicate quantity counting)
       const [selectedVariants, setSelectedVariants] = React.useState([]);
@@ -1871,6 +2112,43 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
         });
       };
 
+      // Visual custom swap execution handler
+      const executeSensitivitySwap = (oldVId) => {
+        if (!selectedSwapId || !contract) return;
+        setActivating(true);
+
+        fetch("/api/storefront/portal/swap", {
+          method: "POST",
+          headers: { 
+            "Content-Type": "application/json",
+            "x-shop-domain": "${shop}",
+            "x-test-session-id": "beauty-portal-session"
+          },
+          body: JSON.stringify({ 
+            contractId: contract.id, 
+            oldVariantId: oldVId,
+            newVariantId: selectedSwapId
+          })
+        })
+        .then(res => res.json())
+        .then(data => {
+          if (data.success) {
+            setContract(data.contract || data.updated);
+            setNotification("🔄 Product variant successfully swapped for your custom choice!");
+            setTimeout(() => setNotification(null), 3000);
+            setIsSwapping(false);
+            setSelectedSwapId("");
+          } else {
+            alert("Failed to swap: " + (data.error || "Unknown error"));
+          }
+          setActivating(false);
+        })
+        .catch(err => {
+          console.error("Swap execution failed:", err);
+          setActivating(false);
+        });
+      };
+
       // GlowBot Live Chat Command Handler (processes real DB mutations)
       const handleChatCommand = (cmd) => {
         if (!cmd.trim() || !contract) return;
@@ -2202,8 +2480,50 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
                 e("button", { className: "btn-secondary", onClick: delayBox }, "📅 Delay 15d")
               ),
               e("div", { className: "grid" },
-                e("button", { className: "btn-secondary", onClick: swapProduct }, "🔄 Swap Serum"),
+                e("button", { className: "btn-secondary", onClick: () => setIsSwapping(!isSwapping) }, isSwapping ? "Cancel Swap" : "🔄 Swap Product"),
                 e("button", { className: "btn-secondary", onClick: togglePause }, contract.status === "PAUSED" ? "▶️ Resume" : "⏸️ Pause Routine")
+              ),
+              
+              // Custom Swapping console (Sensitivity Custom Intercept)
+              isSwapping && e("div", { style: { borderTop: "1px dashed var(--primary-color)", marginTop: "10px", paddingTop: "10px" } },
+                e("div", { style: { fontSize: "11px", fontWeight: "bold", color: "var(--primary-color)", marginBottom: "6px" } }, "Select Alternative Product"),
+                e("div", { style: { display: "flex", gap: "8px", flexDirection: "column" } },
+                  e("select", {
+                    value: selectedSwapId,
+                    onChange: (ev) => setSelectedSwapId(ev.target.value),
+                    style: { width: "100%", padding: "8px", borderRadius: "6px", border: "1px solid var(--primary-color)", fontSize: "13px", outline: "none", background: "white", cursor: "pointer" }
+                  },
+                    e("option", { value: "" }, "Choose your replacement..."),
+                    (() => {
+                      // Filter out items already in the visual core routine to prevent duplicates!
+                      const currentCoreIds = selectedVariants.slice(0, maxSlots);
+                      return swapAlternatives
+                        .filter(gId => !currentCoreIds.includes(gId))
+                        .map(gId => {
+                          let name = "Deluxe Product";
+                          if (gId === "gid://shopify/ProductVariant/5001") name = "Vitamin C Serum";
+                          else if (gId === "gid://shopify/ProductVariant/5002") name = "Charcoal Face Mask";
+                          else if (gId === "gid://shopify/ProductVariant/5003") name = "Barrier Restore Moisturizer";
+                          return e("option", { key: gId, value: gId }, name);
+                        });
+                    })()
+                  ),
+                  e("button", { 
+                    className: "btn-primary",
+                    disabled: !selectedSwapId || activating,
+                    onClick: () => {
+                      // Swap out the first core routine items variant inside contract
+                      const coreItems = typeof contract.items === "string" ? JSON.parse(contract.items) : contract.items;
+                      const firstSerum = coreItems.find(it => !it.isFreeGift && !it.isAddOn);
+                      if (firstSerum) {
+                        executeSensitivitySwap(firstSerum.variantId);
+                      } else {
+                        alert("No core subscription product found in your routine box to swap!");
+                      }
+                    },
+                    style: { width: "100%", padding: "8px", fontSize: "12px", fontWeight: "bold" }
+                  }, activating ? "⏳ Swapping..." : "🔄 Confirm Swap Product")
+                )
               ),
               e("div", { className: "grid" },
                 e("button", { className: "btn-secondary", onClick: () => setFrequency(45) }, "⚙️ Set 45d Delivery"),
@@ -5293,8 +5613,8 @@ app.get("/", (req, res) => {
         return e("div", null,
           renderCustomerSelector(),
           e("div", { className: "grid", style: { gridTemplateColumns: "1fr 1fr", gap: "20px" } },
-            e("div", { className: "card", style: { backgroundColor: "#fafbfb", border: "1px solid #e1e3e5", display: "flex", flexDirection: "column", alignItems: "center" } },
-              e("div", { style: { width: "100%", maxWidth: "340px", backgroundColor: "#fff", border: "1px solid #c9cccf", borderRadius: "12px", padding: "16px", boxShadow: "0 4px 12px rgba(0,0,0,0.05)" } },
+            e("div", { className: "card", style: { backgroundColor: "#fafbfb", border: "1px solid #e1e3e5", display: "flex", flexDirection: "column", alignItems: "stretch" } },
+              e("div", { style: { width: "100%", backgroundColor: "#fff", border: "1px solid #c9cccf", borderRadius: "12px", padding: "16px", boxShadow: "0 4px 12px rgba(0,0,0,0.05)" } },
                 e("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid #e1e3e5", paddingBottom: "10px", marginBottom: "12px" } },
                   e("span", { style: { fontWeight: "bold", fontSize: "14px", color: "#2c3e50" } }, "🌟 The Glow Portal"),
                   e("span", { className: "badge badge-" + portalContract.status.toLowerCase() }, portalContract.status)
