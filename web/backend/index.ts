@@ -1576,7 +1576,7 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
 
       // GlowBot Chat Assistant states
       const [chatMessages, setChatMessages] = React.useState([
-        { sender: "bot", text: "Hey Glowgetter! GlowBot here. 🌟 Need help with your routine box shipment? \n\nReply with a number:\n1 - Delay 30 Days\n2 - Skip Next Shipment\n3 - Swap Serum for gentle formula\n4 - Add-on Moisturizer" }
+        { sender: "bot", text: "Hey Glowgetter! GlowBot here. 🌟 Need help with your routine box shipment? \\n\\nReply with a number:\\n1 - Delay 30 Days\\n2 - Skip Next Shipment\\n3 - Swap Serum for gentle formula\\n4 - Add-on Moisturizer" }
       ]);
       const [chatInput, setChatInput] = React.useState("");
 
@@ -1908,7 +1908,7 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
             botText = "GlowBot: Added! 🛍& Barrier Restore Moisturizer added to your upcoming box. Thank you!";
             addMoisturizer();
           } else if (option === "help") {
-            botText = "GlowBot Options:\n1 - Delay 30 Days\n2 - Skip Next Box\n3 - Swap Serum\n4 - Add-on Moisturizer";
+            botText = "GlowBot Options:\n1 - Delay 30 Days\n2 - Skip Next Box\n3 - Swap Serum\n4 - Add-on Moisturizer".replace(/\n/g, "\\n");
           }
           
           setChatMessages(prev => [...prev, { sender: "bot", text: botText }]);
