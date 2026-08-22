@@ -1503,16 +1503,22 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
 </head>
 <body>
+  <textarea id="bootstrap-contract" style="display:none;">${JSON.stringify(contract || null).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")}</textarea>
+  <textarea id="bootstrap-profile" style="display:none;">${JSON.stringify(profile || null).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")}</textarea>
+  <textarea id="bootstrap-products" style="display:none;">${JSON.stringify(shopifyProducts).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")}</textarea>
   <div id="app"></div>
   <script>
     const e = React.createElement;
 
     function CustomerPortal() {
-      const [contract, setContract] = React.useState(${JSON.stringify(contract)});
-      const [profile, setProfile] = React.useState(${JSON.stringify(profile)});
+      const contractData = JSON.parse(document.getElementById("bootstrap-contract").value);
+      const profileData = JSON.parse(document.getElementById("bootstrap-profile").value);
+      const liveProducts = JSON.parse(document.getElementById("bootstrap-products").value);
+
+      const [contract, setContract] = React.useState(contractData);
+      const [profile, setProfile] = React.useState(profileData);
       const [notification, setNotification] = React.useState(null);
       
-      const liveProducts = ${JSON.stringify(shopifyProducts)};
       const milestoneCount = ${milestoneCount};
       const eligibleGifts = ${JSON.stringify(giftIds)};
 
