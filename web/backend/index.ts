@@ -795,6 +795,67 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
     }
   });
 
+  // POST /api/storefront/portal/choose-gift (Customer chooses exactly 1 milestone free gift)
+  app.post("/api/storefront/portal/choose-gift", validateStorefrontSession, async (req, res) => {
+    try {
+      const session = req.body.session;
+      const { contractId, variantId } = req.body;
+      if (!contractId || !variantId) {
+        return res.status(400).json({ error: "Missing required contract or gift variant parameters" });
+      }
+
+      const contract = await prisma.subscriptionContract.findUnique({ where: { id: contractId } });
+      if (!contract) {
+        return res.status(404).json({ error: "Subscription contract not found" });
+      }
+
+      const dbSession = await prisma.session.findFirst({ where: { shop: contract.shop } });
+      const milestoneCount = dbSession?.milestoneOrderCount || 3;
+      const giftIds = JSON.parse(dbSession?.giftVariantIds || "[]");
+
+      if (!giftIds.includes(variantId)) {
+        return res.status(400).json({ error: "Selected product is not in the eligible milestone gifts list" });
+      }
+
+      let items = JSON.parse(contract.items || "[]");
+      const hasExistingGift = items.some((it: any) => it.isFreeGift);
+      if (hasExistingGift) {
+        return res.status(400).json({ error: "You have already claimed a free milestone reward for this shipment box!" });
+      }
+
+      // Check if they are eligible based on order completions
+      if (contract.ordersCompleted < milestoneCount) {
+        return res.status(400).json({ error: "Subscriber has not completed enough recurring orders to unlock milestone rewards yet." });
+      }
+
+      let productName = "Milestone Deluxe Sample";
+      let price = 0.00;
+      
+      // Resolve product name from catalog / inventory if possible
+      if (variantId === "gid://shopify/ProductVariant/5001") productName = "Vitamin C Serum (Milestone Gift)";
+      else if (variantId === "gid://shopify/ProductVariant/5002") productName = "Charcoal Face Mask (Milestone Gift)";
+      else if (variantId === "gid://shopify/ProductVariant/5003") productName = "Moisturizer (Milestone Gift)";
+
+      items.push({
+        variantId,
+        productName,
+        price,
+        quantity: 1,
+        isFreeGift: true
+      });
+
+      const updated = await prisma.subscriptionContract.update({
+        where: { id: contractId },
+        data: { items: JSON.stringify(items) }
+      });
+
+      console.log(`[Glow Portal Milestone Claim] Subscriber ${contract.customerId} successfully claimed free gift: ${productName}`);
+      res.json({ success: true, contract: updated });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // GET /api/admin/theme-settings (Retrieve custom colors and styling branding)
   app.get("/api/admin/theme-settings", async (req, res) => {
     try {
@@ -987,6 +1048,11 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
           console.error("Error reading theme config file:", e);
         }
       }
+
+      // Load Milestone and surprise unboxing rewards settings dynamically
+      const dbSessionRecord = await prisma.session.findFirst({ where: { shop } });
+      const milestoneCount = dbSessionRecord?.milestoneOrderCount || 3;
+      const giftIds = JSON.parse(dbSessionRecord?.giftVariantIds || "[]");
 
       res.setHeader("Content-Type", "text/html");
       res.send(`<!DOCTYPE html>
@@ -1447,6 +1513,11 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
       const [notification, setNotification] = React.useState(null);
       
       const liveProducts = ${JSON.stringify(shopifyProducts)};
+      const milestoneCount = ${milestoneCount};
+      const eligibleGifts = ${JSON.stringify(giftIds)};
+
+      const [selectedGiftId, setSelectedGiftId] = React.useState("");
+      const [claimingGift, setClaimingGift] = React.useState(false);
 
       // Unified selectedVariants state (flat array representing items, supporting duplicate quantity counting)
       const [selectedVariants, setSelectedVariants] = React.useState(() => {
@@ -1774,6 +1845,41 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
         .catch(err => {
           console.error("Failed to save routine edits:", err);
           setActivating(false);
+        });
+      };
+
+      // Milestone gift claim handler
+      const claimMilestoneGift = () => {
+        if (!selectedGiftId || !contract) return;
+        setClaimingGift(true);
+
+        fetch("/api/storefront/portal/choose-gift", {
+          method: "POST",
+          headers: { 
+            "Content-Type": "application/json",
+            "x-shop-domain": "${shop}",
+            "x-test-session-id": "beauty-portal-session"
+          },
+          body: JSON.stringify({ 
+            contractId: contract.id, 
+            variantId: selectedGiftId
+          })
+        })
+        .then(res => res.json())
+        .then(data => {
+          if (data.success) {
+            setContract(data.contract);
+            setNotification("🎁 Milestone free gift claimed successfully and added to your next shipment box!");
+            setTimeout(() => setNotification(null), 3000);
+            setSelectedGiftId("");
+          } else {
+            alert("Failed to claim gift: " + (data.error || "Unknown error"));
+          }
+          setClaimingGift(false);
+        })
+        .catch(err => {
+          console.error("Gift claim failed:", err);
+          setClaimingGift(false);
         });
       };
 
@@ -2177,16 +2283,69 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
               )
             ),
 
+            // Dynamic Surprise & Delight Milestone Selector (unlocked when ordersCompleted >= milestoneCount)
+            React.useMemo(() => {
+              if (!contract || contract.ordersCompleted < milestoneCount) return null;
+              
+              // Parse current items to see if a free milestone gift is already claimed
+              const currentItems = typeof contract.items === "string" ? JSON.parse(contract.items) : contract.items;
+              const hasAlreadyClaimed = currentItems.some(it => it.isFreeGift);
+              if (hasAlreadyClaimed) return null; // hides selector once claimed!
+
+              return e("div", { className: "free-gift-card", style: { background: "linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%)", border: "2px dashed #008060", padding: "16px", borderRadius: "12px", marginBottom: "20px" } },
+                e("div", { style: { fontSize: "36px" } }, "🎁"),
+                e("div", { style: { flex: 1 } },
+                  e("span", { className: "free-gift-badge", style: { background: "#008060", color: "white", fontSize: "9px", padding: "2px 6px", borderRadius: "10px", fontWeight: "bold" } }, "👑 Milestone Unlocked"),
+                  e("div", { style: { fontSize: "14px", fontWeight: "bold", color: "#14532d", marginTop: "4px" } }, "Congratulations! You completed " + contract.ordersCompleted + " orders."),
+                  e("p", { style: { fontSize: "12px", color: "#166534", margin: "4px 0 12px 0" } }, "Select exactly 1 free reward from our milestone catalog to include in your next upcoming box shipment:"),
+                  
+                  e("div", { style: { display: "flex", gap: "10px", alignItems: "center", marginBottom: "12px", flexWrap: "wrap" } },
+                    e("select", {
+                      value: selectedGiftId,
+                      onChange: (ev) => setSelectedGiftId(ev.target.value),
+                      style: { flex: 1, padding: "8px", borderRadius: "6px", border: "1px solid #008060", fontSize: "13px", outline: "none", background: "white", cursor: "pointer" }
+                    },
+                      e("option", { value: "" }, "Choose your deluxe gift..."),
+                      eligibleGifts.map(gId => {
+                        let name = "Deluxe Product Gift";
+                        if (gId === "gid://shopify/ProductVariant/5001") name = "Vitamin C Serum (Free Gift)";
+                        else if (gId === "gid://shopify/ProductVariant/5002") name = "Charcoal Face Mask (Free Gift)";
+                        else if (gId === "gid://shopify/ProductVariant/5003") name = "Moisturizer (Free Gift)";
+                        return e("option", { key: gId, value: gId }, name);
+                      })
+                    ),
+                    e("button", { 
+                      className: "button-primary",
+                      disabled: !selectedGiftId || claimingGift,
+                      onClick: claimMilestoneGift,
+                      style: { padding: "8px 16px", background: "#008060", color: "white", border: "none", borderRadius: "6px", fontSize: "13px", fontWeight: "bold", cursor: "pointer" }
+                    }, claimingGift ? "⏳ Claiming..." : "🎁 Add Gift to Box")
+                  )
+                )
+              );
+            }, [contract, selectedGiftId, claimingGift, eligibleGifts, milestoneCount]),
+
             // Visual Rewards, Add-on & Free Gift Manager (Like Bliss / Poppin / Peak Fuel)
             e("div", { style: { marginBottom: "20px", background: "#fffaf0", padding: "14px", borderRadius: "12px", border: "1px dashed #dd6b20" } },
               e("div", { style: { fontSize: "11px", fontWeight: "700", color: "#c05621", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "8px" } }, "🎁 Active Box Add-ons & Free Rewards"),
               
-              selectedVariants.length === 0 && !isFreeGiftUnlocked ? 
-                e("p", { style: { fontSize: "12px", color: "#dd6b20", margin: 0, fontStyle: "italic" } }, "Add items above to unlock safe deluxe samples and customized add-ons!") :
+              (() => {
+                // Read claimed free gifts and active manual add-ons from contract if available
+                const contractItems = contract ? (typeof contract.items === "string" ? JSON.parse(contract.items) : contract.items) : [];
+                const activeGifts = contractItems.filter(it => it.isFreeGift);
                 
-                e("div", { style: { display: "flex", flexDirection: "column", gap: "8px" } },
-                  // 1. Dynamic Free Gift Reward
-                  isFreeGiftUnlocked && e("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 12px", background: "#fff", borderRadius: "8px", border: "1px solid #feebc8" } },
+                const hasUnlockedBuilderGift = !contract && isFreeGiftUnlocked;
+                const hasClaimedActiveGift = contract && activeGifts.length > 0;
+                
+                const totalAddonCount = selectedVariants.slice(maxSlots).length;
+                
+                if (totalAddonCount === 0 && !hasUnlockedBuilderGift && !hasClaimedActiveGift) {
+                  return e("p", { style: { fontSize: "12px", color: "#dd6b20", margin: 0, fontStyle: "italic" } }, "Add items above to unlock safe deluxe samples and customized add-ons!");
+                }
+
+                return e("div", { style: { display: "flex", flexDirection: "column", gap: "8px" } },
+                  // 1. Dynamic Auto-Unlocked Builder Free Gift
+                  hasUnlockedBuilderGift && e("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 12px", background: "#fff", borderRadius: "8px", border: "1px solid #feebc8" } },
                     e("div", { style: { display: "flex", alignItems: "center", gap: "8px" } },
                       e("span", { style: { fontSize: "18px" } }, "🎁"),
                       e("div", null,
@@ -2197,7 +2356,57 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
                     e("span", { style: { fontSize: "12px", fontWeight: "bold", color: "#008060" } }, "FREE")
                   ),
                   
-                  // 2. Manual Add-ons (any variants in selectedVariants beyond the first 3 slots)
+                  // 2. Active Claimed Milestone Gifts (with tactile ✕ Remove option at the DB level!)
+                  hasClaimedActiveGift && activeGifts.map((it, idx) => {
+                    const handleRemoveMilestoneGift = () => {
+                      setActivating(true);
+                      const updatedItems = contractItems.filter(item => item.variantId !== it.variantId);
+                      fetch("/api/storefront/portal/update-items", {
+                        method: "POST",
+                        headers: { 
+                          "Content-Type": "application/json",
+                          "x-shop-domain": "${shop}",
+                          "x-test-session-id": "beauty-portal-session"
+                        },
+                        body: JSON.stringify({ 
+                          contractId: contract.id, 
+                          items: updatedItems
+                        })
+                      })
+                      .then(res => res.json())
+                      .then(data => {
+                        if (data.success) {
+                          setContract(data.contract);
+                          setNotification("🔄 Milestone gift removed! You can now select a different reward.");
+                          setTimeout(() => setNotification(null), 3000);
+                        }
+                        setActivating(false);
+                      })
+                      .catch(err => {
+                        console.error("Failed to remove milestone gift:", err);
+                        setActivating(false);
+                      });
+                    };
+
+                    return e("div", { key: "gift-" + idx, style: { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 12px", background: "#fff", borderRadius: "8px", border: "1px solid #b8dfc4" } },
+                      e("div", { style: { display: "flex", alignItems: "center", gap: "8px" } },
+                        e("span", { style: { fontSize: "18px" } }, "🎁"),
+                        e("div", null,
+                          e("div", { style: { fontSize: "12px", fontWeight: "bold", color: "#14532d" } }, it.productName),
+                          e("span", { className: "free-gift-badge", style: { fontSize: "8px", padding: "1px 4px", background: "#008060" } }, "Milestone Gift Claimed")
+                        )
+                      ),
+                      e("div", { style: { display: "flex", alignItems: "center", gap: "10px" } },
+                        e("span", { style: { fontSize: "12px", fontWeight: "bold", color: "#008060" } }, "FREE"),
+                        e("button", { 
+                          onClick: handleRemoveMilestoneGift,
+                          style: { background: "none", border: "none", color: "#e53e3e", fontWeight: "bold", cursor: "pointer", fontSize: "14px", padding: "0 4px" }
+                        }, "✕")
+                      )
+                    );
+                  }),
+                  
+                  // 3. Manual Add-ons
                   selectedVariants.slice(maxSlots).map((vId, subIdx) => {
                     const prod = liveProducts.find(p => p.variantId === vId);
                     const actualIdx = maxSlots + subIdx;
@@ -2223,7 +2432,8 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
                       )
                     );
                   })
-                )
+                );
+              })()
             ),
 
             // Search & Filter controls
