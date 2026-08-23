@@ -2682,8 +2682,7 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
                 e("button", { className: "btn-primary", onClick: addDynamicAddOn }, "🛍️ + Personalized Add-on")
               )
             )
-          )
-        ),
+          ),
 
         // Tab View 1: My Box Curation (Spacious Widescreen Routine slots & Catalog side-by-side!)
         activeStorefrontTab === "curation" && e("div", { className: "dashboard-layout" },
