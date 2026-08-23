@@ -408,4 +408,54 @@ describe("Beauty Subscription Optimizer Unit Tests — Churn Prediction & AI Cur
     expect(validateAddonLimit(currentItems, "5003", 2)).toBe(true);  // allowed at limit of 2
     expect(validateAddonLimit(currentItems, "5004", 1)).toBe(true);  // allowed for different product
   });
+
+  it("should calculate consecutive billing loyalty points and verify point-redeemed debits", () => {
+    // 10 points per order completed, with a multiplier streak after order 3!
+    const calculateAccruedPoints = (ordersCompleted: number) => {
+      const basePointsPerOrder = 10;
+      const multiplier = ordersCompleted >= 3 ? 1.5 : 1.0;
+      return Math.floor(ordersCompleted * basePointsPerOrder * multiplier);
+    };
+
+    expect(calculateAccruedPoints(1)).toBe(10);
+    expect(calculateAccruedPoints(2)).toBe(20);
+    expect(calculateAccruedPoints(3)).toBe(45); // Unlocked streak booster!
+    expect(calculateAccruedPoints(4)).toBe(60);
+
+    // Verify point debited redemptions
+    const debitPoints = (currentPoints: number, pointsRequired: number) => {
+      if (currentPoints < pointsRequired) throw new Error("Insufficient points");
+      return currentPoints - pointsRequired;
+    };
+    expect(debitPoints(100, 30)).toBe(70);
+    expect(() => debitPoints(20, 50)).toThrow("Insufficient points");
+  });
+
+  it("should resolve cohort A/B test groups and simulate smart payment retry scheduler optimization", () => {
+    // Test A/B split logic
+    const resolveCohortTestGroup = (customerId: string, splitActive: boolean) => {
+      if (!splitActive) return "DEFAULT";
+      // Deterministic hash split based on character codes
+      const charSum = customerId.split("").reduce((sum, char) => sum + char.charCodeAt(0), 0);
+      return charSum % 2 === 0 ? "COHORT_A" : "COHORT_B";
+    };
+
+    expect(resolveCohortTestGroup("cust_123", false)).toBe("DEFAULT");
+    expect(resolveCohortTestGroup("customer_even_1", true)).toBeDefined();
+
+    // Verify Smart Dunning calculations (resolves optimal payroll retry dates)
+    const calculateOptimalRetryDate = (lastFailedDate: Date, smartDaySetting: number) => {
+      const d = new Date(lastFailedDate.getTime());
+      // Use UTC methods to guarantee 100% timezone-independent execution!
+      d.setUTCDate(smartDaySetting);
+      if (d.getTime() <= lastFailedDate.getTime()) {
+        d.setUTCMonth(d.getUTCMonth() + 1);
+      }
+      return d;
+    };
+
+    const failedOnAug15 = new Date("2026-08-15");
+    const nextOptimalDay1 = calculateOptimalRetryDate(failedOnAug15, 1);
+    expect(nextOptimalDay1.toISOString().split("T")[0]).toBe("2026-09-01"); // Safely rolls over to Sept 1st payroll optimal!
+  });
 });

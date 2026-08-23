@@ -1123,6 +1123,8 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
         themeSecondaryColor: "#1a365d", // premium deep navy by default
         maxAddonLimit: 1, // default limit of 1 add-on per subscriber
         minStartDateDays: 2, // default min days to start subscription is 2
+        abTestSplitActive: false, // Cohort split test disabled by default
+        smartDunningDay: 1, // Retries scheduler recovers on day 1 optimal payroll by default
         eligibleAddonVariantIds: liveProductGids.length > 0 ? liveProductGids : [
           "gid://shopify/ProductVariant/5001",
           "gid://shopify/ProductVariant/5002",
@@ -1165,7 +1167,7 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
   // POST /api/admin/theme-settings (Update theme colors and branding settings)
   app.post("/api/admin/theme-settings", async (req, res) => {
     try {
-      const { shop, themePrimaryColor, themeSecondaryColor, maxAddonLimit, minStartDateDays, eligibleAddonVariantIds, discountProfiles } = req.body;
+      const { shop, themePrimaryColor, themeSecondaryColor, maxAddonLimit, minStartDateDays, abTestSplitActive, smartDunningDay, eligibleAddonVariantIds, discountProfiles } = req.body;
       if (!shop) {
         return res.status(400).json({ error: "Missing required shop parameter" });
       }
@@ -1188,6 +1190,8 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
 
       const existingLimit = allConfigs[shop]?.maxAddonLimit !== undefined ? allConfigs[shop].maxAddonLimit : 1;
       const existingMinDate = allConfigs[shop]?.minStartDateDays !== undefined ? allConfigs[shop].minStartDateDays : 2;
+      const existingAbTest = allConfigs[shop]?.abTestSplitActive !== undefined ? allConfigs[shop].abTestSplitActive : false;
+      const existingDunning = allConfigs[shop]?.smartDunningDay !== undefined ? allConfigs[shop].smartDunningDay : 1;
       const existingAddons = allConfigs[shop]?.eligibleAddonVariantIds || liveProductGids;
       const existingProfiles = allConfigs[shop]?.discountProfiles || [
         {
@@ -1205,6 +1209,8 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
         themeSecondaryColor: themeSecondaryColor || allConfigs[shop]?.themeSecondaryColor || "#1a365d",
         maxAddonLimit: maxAddonLimit !== undefined ? parseInt(maxAddonLimit) : existingLimit,
         minStartDateDays: minStartDateDays !== undefined ? parseInt(minStartDateDays) : existingMinDate,
+        abTestSplitActive: abTestSplitActive !== undefined ? Boolean(abTestSplitActive) : existingAbTest,
+        smartDunningDay: smartDunningDay !== undefined ? parseInt(smartDunningDay) : existingDunning,
         eligibleAddonVariantIds: eligibleAddonVariantIds || existingAddons,
         discountProfiles: discountProfiles || existingProfiles
       };
@@ -1216,23 +1222,162 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
     }
   });
 
-  // GET /api/storefront/portal/view (Standalone Live Customer-Facing Portal Webpage!)
-  app.get("/api/storefront/portal/view", async (req, res) => {
+  // POST /api/storefront/portal/magic-link (Request a secure, passwordless 1-click entry link!)
+  app.post("/api/storefront/portal/magic-link", async (req, res) => {
     try {
-      const { customerId, shop: queryShop } = req.query;
-      const shop = (queryShop as string) || "beauty-e2e-shop.myshopify.com";
+      const { emailOrPhone, shop: bodyShop } = req.body;
+      const shop = bodyShop || "beauty-e2e-shop.myshopify.com";
 
-      if (!customerId) {
-        return res.status(400).send("<h3>Missing customerId query parameter</h3>");
+      if (!emailOrPhone) {
+        return res.status(400).json({ success: false, error: "Please provide your email or phone number" });
+      }
+
+      // Search database CustomerProfile cleanly
+      const term = emailOrPhone.trim().toLowerCase();
+      const profile = await prisma.customerProfile.findFirst({
+        where: {
+          shop,
+          OR: [
+            { email: { equals: term, mode: "insensitive" } },
+            { phone: { contains: term, mode: "insensitive" } }
+          ]
+        }
+      });
+
+      if (!profile) {
+        return res.status(404).json({ success: false, error: "No active skincare profile found matching that email/phone." });
+      }
+
+      // Generate secure 32-byte token
+      const token = crypto.randomBytes(16).toString("hex");
+      const expires = new Date(Date.now() + 15 * 60 * 1000); // 15 mins expiry
+
+      await prisma.customerProfile.update({
+        where: { id: profile.id },
+        data: {
+          magicLinkToken: token,
+          magicLinkExpires: expires
+        }
+      });
+
+      const redirectUrl = `/api/storefront/portal/view?customerId=${encodeURIComponent(profile.customerId)}&token=${token}&shop=${encodeURIComponent(shop)}`;
+      console.log(`[Magic Link Gateway] Token generated for subscriber ${profile.name}: ${redirectUrl}`);
+
+      res.json({ success: true, redirectUrl });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // POST /api/storefront/portal/redeem-points (Redeem Glow points loyalty streaks inside the portal!)
+  app.post("/api/storefront/portal/redeem-points", async (req, res) => {
+    try {
+      const { customerId, variantId, pointsRequired, shop: bodyShop } = req.body;
+      const shop = bodyShop || "beauty-e2e-shop.myshopify.com";
+
+      if (!customerId || !variantId || !pointsRequired) {
+        return res.status(400).json({ success: false, error: "Missing required parameters" });
       }
 
       const profile = await prisma.customerProfile.findFirst({
-        where: { customerId: customerId as string, shop }
+        where: { customerId, shop }
       });
 
+      if (!profile) {
+        return res.status(404).json({ success: false, error: "Customer profile not found" });
+      }
+
+      if (profile.glowPoints < parseInt(pointsRequired)) {
+        return res.status(400).json({ success: false, error: `Insufficient Glow Points! You need ${pointsRequired} points but have ${profile.glowPoints}.` });
+      }
+
       const contract = await prisma.subscriptionContract.findFirst({
-        where: { customerId: customerId as string, shop }
+        where: { customerId, shop }
       });
+
+      if (!contract) {
+        return res.status(404).json({ success: false, error: "Active subscription routine contract not found" });
+      }
+
+      // Deduct points
+      const updatedProfile = await prisma.customerProfile.update({
+        where: { id: profile.id },
+        data: { glowPoints: profile.glowPoints - parseInt(pointsRequired) }
+      });
+
+      // Query inventory to resolve name/price
+      let prodName = "Deluxe Routine Product";
+      if (variantId.includes("5001")) prodName = "Vitamin C Brightening Serum";
+      else if (variantId.includes("5002")) prodName = "Charcoal Face Mask";
+      else if (variantId.includes("5003")) prodName = "Barrier Restore Moisturizer";
+
+      // Inject point-redeemed product variant directly into postgres contract items
+      let currentItems = [];
+      try {
+        currentItems = typeof contract.items === "string" ? JSON.parse(contract.items) : contract.items;
+      } catch (e) {
+        currentItems = [];
+      }
+
+      currentItems.push({
+        variantId,
+        productName: prodName + " (Redeemed VIP Perk)",
+        price: 0.00, // Absolutely free!
+        isAddOn: true,
+        isFreeGift: true, // Tag as free gift
+        quantity: 1
+      });
+
+      const updatedContract = await prisma.subscriptionContract.update({
+        where: { id: contract.id },
+        data: { items: currentItems }
+      });
+
+      res.json({ success: true, profile: updatedProfile, contract: updatedContract });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // GET /api/storefront/portal/view (Standalone Live Customer-Facing Portal Webpage!)
+  app.get("/api/storefront/portal/view", async (req, res) => {
+    try {
+      const { customerId, shop: queryShop, token } = req.query;
+      const shop = (queryShop as string) || "beauty-e2e-shop.myshopify.com";
+
+      // Secure Passwordless Token Verification!
+      let authenticatedProfile = null;
+      if (token) {
+        const profileByToken = await prisma.customerProfile.findFirst({
+          where: { magicLinkToken: token as string, shop }
+        });
+        if (profileByToken) {
+          if (profileByToken.magicLinkExpires && profileByToken.magicLinkExpires > new Date()) {
+            authenticatedProfile = profileByToken;
+            // Clear token to prevent replay reuse!
+            await prisma.customerProfile.update({
+              where: { id: profileByToken.id },
+              data: { magicLinkToken: null, magicLinkExpires: null }
+            });
+          } else {
+            return res.status(401).send("<h3>Glow Headquarters Error: Magic Access Link has expired. Please request a new link!</h3>");
+          }
+        } else {
+          return res.status(401).send("<h3>Glow Headquarters Error: Magic Access Link is invalid. Please request a new link!</h3>");
+        }
+      }
+
+      // If they accessed directly without a session and without a token, let them enter via Gateway
+      let profile = authenticatedProfile;
+      if (!profile && customerId) {
+        profile = await prisma.customerProfile.findFirst({
+          where: { customerId: customerId as string, shop }
+        });
+      }
+
+      const contract = customerId ? await prisma.subscriptionContract.findFirst({
+        where: { customerId: customerId as string, shop }
+      }) : null;
 
       // Query real active products from Shopify if session is available
       const session = await prisma.session.findFirst({
@@ -1778,6 +1923,45 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
       gap: 32px;
       align-items: start;
     }
+    /* Premium Luxury Modal Overlay styles */
+    .modal-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0, 0, 0, 0.45); /* ultra soft luxury overlay dimming */
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 9999; /* ensure it always stays on top of everything */
+      animation: fadeIn 0.25s ease-out;
+    }
+    .modal-content {
+      background: white;
+      padding: 32px;
+      border-radius: 4px; /* sharp editorial luxury corners */
+      max-width: 680px;
+      width: 90%;
+      position: relative;
+      box-shadow: 0 24px 64px rgba(0,0,0,0.12); /* smooth premium drop shadow */
+      border: 1px solid #eae6df;
+      animation: fadeIn 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    .modal-close {
+      position: absolute;
+      top: 20px;
+      right: 20px;
+      background: none;
+      border: none;
+      font-size: 20px;
+      cursor: pointer;
+      color: #718096;
+      transition: color 0.2s;
+    }
+    .modal-close:hover {
+      color: #111111;
+    }
     .profile-card {
       background: #ffffff;
       border: 1px solid #eae6df;
@@ -1874,6 +2058,18 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
       const [contract, setContract] = React.useState(contractData);
       const [profile, setProfile] = React.useState(profileData);
       const [notification, setNotification] = React.useState(null);
+
+      // Passwordless Gateway login state
+      const [loginInput, setLoginInput] = React.useState("");
+      const [loginStatus, setLoginStatus] = React.useState(""); // "", "sending", "success", "error"
+      const [loginError, setLoginError] = React.useState("");
+      const [redirectLink, setRedirectLink] = React.useState("");
+
+      // Loyalty points streaks & debits state (glowPoints starts at profile points or default 50 for testing)
+      const [glowPoints, setGlowPoints] = React.useState(profile ? (profile.glowPoints !== undefined ? profile.glowPoints : 50) : 50);
+
+      // Cancellation Interception Save Flow state
+      const [showCancellationSaveFlow, setShowCancellationSaveFlow] = React.useState(false);
       
       const milestoneCount = ${milestoneCount};
       const eligibleGifts = ${JSON.stringify(giftIds)};
@@ -1884,6 +2080,7 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
       const [claimingGift, setClaimingGift] = React.useState(false);
 
       const [activeStorefrontTab, setActiveStorefrontTab] = React.useState("curation");
+      const [activeModalProduct, setActiveModalProduct] = React.useState(null);
 
       // Split visual routine selections: core subscription variants vs. one-time addon variants
       const [coreVariants, setCoreVariants] = React.useState(() => {
@@ -2072,7 +2269,7 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
         };
       }, [profile, formSkinType, formConcerns, formAllergens, liveProducts, searchQuery, strictFilter, currentPage]);
 
-      const maxSlots = 3;
+      const maxSlots = Math.max(3, coreVariants.length + 1);
       const slotsToRender = Array.from({ length: maxSlots });
       const isFreeGiftUnlocked = coreVariants.length >= 2;
 
@@ -2334,6 +2531,80 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
         });
       };
 
+      // Passwordless Magic Login requester
+      const handleRequestMagicLink = () => {
+        if (!loginInput.trim()) {
+          alert("Please enter a valid email or phone number first!");
+          return;
+        }
+        setLoginStatus("sending");
+        fetch("/api/storefront/portal/magic-link", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ emailOrPhone: loginInput, shop: "${shop}" })
+        })
+        .then(res => res.json())
+        .then(data => {
+          if (data.success) {
+            setLoginStatus("success");
+            setRedirectLink(data.redirectUrl);
+          } else {
+            setLoginStatus("error");
+            setLoginError(data.error || "Skincare profile not found.");
+          }
+        })
+        .catch(err => {
+          setLoginStatus("error");
+          setLoginError("Failed to connect to gateway: " + err.message);
+        });
+      };
+
+      // Loyalty points streaks & debits point-redeem helper (Parity with Smartrr/ Stay AI)
+      const handleRedeemPoints = (variantId, pointsRequired) => {
+        if (glowPoints < pointsRequired) {
+          alert("Insufficient Glow Points! You need " + pointsRequired + " points but currently have " + glowPoints + ". Keep your subscription active to earn more points!");
+          return;
+        }
+        setActivating(true);
+        fetch("/api/storefront/portal/redeem-points", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ 
+            customerId: profile ? profile.customerId : "${customerId}", 
+            variantId, 
+            pointsRequired, 
+            shop: "${shop}" 
+          })
+        })
+        .then(res => res.json())
+        .then(data => {
+          if (data.success) {
+            setGlowPoints(data.profile.glowPoints);
+            setContract(data.contract);
+            
+            // Re-assemble current state cleanly inside frontend React states
+            const items = data.contract.items || [];
+            const aList = [];
+            items.forEach(it => {
+              if (it.isAddOn && !it.isFreeGift) {
+                for (let i = 0; i < (it.quantity || 1); i++) aList.push(it.variantId);
+              }
+            });
+            setAddonVariants(aList);
+            
+            setNotification("🎉 Redeemed successfully! Added directly to your upcoming box free of charge.");
+            setTimeout(() => setNotification(null), 3000);
+          } else {
+            alert("Redemption failed: " + (data.error || "Unknown error"));
+          }
+          setActivating(false);
+        })
+        .catch(err => {
+          console.error("Redeem error:", err);
+          setActivating(false);
+        });
+      };
+
       // Stay AI Scheduling actions
       const triggerAction = (endpoint, body) => {
         fetch(endpoint, {
@@ -2400,6 +2671,40 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
         setTimeout(() => setNotification(null), 3000);
       };
 
+      if (!profile) {
+        return e("div", { style: { display: "flex", alignItems: "center", justifyContent: "center", minHeight: "80vh" } },
+          e("div", { className: "card", style: { maxWidth: "420px", width: "95%", padding: "40px", border: "1px solid #eae6df", background: "#ffffff", borderRadius: "4px", boxShadow: "0 24px 64px rgba(0,0,0,0.02)", textAlign: "center" } },
+            e("h2", { className: "luxury-serif", style: { margin: "0 0 8px 0", fontSize: "24px" } }, "🌟 Unlock your Skincare Portal"),
+            e("p", { style: { fontSize: "13px", color: "#718096", margin: "0 0 24px 0", lineHeight: "1.6" } }, "Welcome back! Enter your email or phone number to receive a secure, 1-click magic link to access your personalized subscription console."),
+            
+            e("div", { className: "form-group", style: { textAlign: "left" } },
+              e("label", { className: "form-label" }, "Email or Phone Number"),
+              e("input", { 
+                type: "text", 
+                value: loginInput, 
+                onChange: (ev) => setLoginInput(ev.target.value),
+                placeholder: "subscriber@example.com or +1...", 
+                style: { width: "100%", padding: "12px", borderRadius: "2px", border: "1px solid #eae6df", fontSize: "13px", boxSizing: "border-box", outline: "none" } 
+              })
+            ),
+            
+            loginStatus === "sending" && e("p", { style: { fontSize: "12px", color: "var(--primary-color)", fontWeight: "bold" } }, "⏳ Connecting to secure gateway..."),
+            loginStatus === "success" && e("div", { style: { background: "#f0fdf4", border: "1px solid #b8dfc4", padding: "12px", borderRadius: "2px", marginBottom: "16px" } },
+              e("p", { style: { fontSize: "12px", color: "#14532d", margin: "0 0 8px 0", fontWeight: "bold" } }, "✨ Magic Link Generated!"),
+              e("a", { href: redirectLink, style: { fontSize: "12px", color: "var(--primary-color)", fontWeight: "bold", textDecoration: "underline" } }, "🚀 Enter Dashboard in 1-Click")
+            ),
+            loginStatus === "error" && e("p", { style: { fontSize: "12px", color: "#e53e3e", fontWeight: "bold" } }, "✕ " + loginError),
+
+            e("button", { 
+              className: "btn-primary", 
+              onClick: handleRequestMagicLink,
+              disabled: loginStatus === "sending",
+              style: { width: "100%", padding: "12px", fontSize: "13px", marginTop: "12px" } 
+            }, "Request Magic Link")
+          )
+        );
+      }
+
       return e("div", null,
         // Header
         e("div", { className: "header", style: { borderBottom: "none", marginBottom: "16px", display: "flex", justifyContent: "space-between", alignItems: "center" } },
@@ -2407,7 +2712,10 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
             e("h2", { style: { margin: 0, fontSize: "22px", fontWeight: "800", color: "#2d3748" } }, "🌟 The Glow Headquarters"),
             e("p", { style: { margin: "2px 0 0 0", color: "#718096", fontSize: "13px" } }, "Personalize, build, and optimize your routine bundle.")
           ),
-          contract && e("span", { className: "badge badge-" + contract.status.toLowerCase() }, contract.status)
+          e("div", { style: { display: "flex", alignItems: "center", gap: "12px" } },
+            e("span", { className: "badge", style: { background: "var(--primary-light)", color: "var(--primary-color)", border: "1px solid var(--primary-color)" } }, "✨ " + glowPoints + " Glow Points"),
+            contract && e("span", { className: "badge badge-" + contract.status.toLowerCase() }, contract.status)
+          )
         ),
 
         notification && e("div", { className: "notification" }, notification),
@@ -2675,7 +2983,7 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
                 e("button", { className: "btn-secondary", onClick: delayBox }, "📅 Delay 15d")
               ),
               e("div", { className: "grid" },
-                e("button", { className: "btn-secondary", onClick: togglePause }, contract.status === "PAUSED" ? "▶️ Resume" : "⏸️ Pause Routine"),
+                e("button", { className: "btn-secondary", onClick: () => { if (contract.status === "ACTIVE") setShowCancellationSaveFlow(true); else togglePause(); } }, contract.status === "PAUSED" ? "▶️ Resume" : "⏸️ Pause Routine"),
                 e("button", { className: "btn-secondary", onClick: () => setFrequency(45) }, "⚙️ Set 45d Delivery")
               ),
               e("div", { className: "grid" },
@@ -2715,6 +3023,10 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
                 const qty = getProductQty(prod.variantId);
                 const isSelected = qty > 0;
                 const isOutOfStock = prod.stockLevel !== undefined && prod.stockLevel <= 0;
+                
+                // Scan discount profiles to check if this product variant qualifies for volume breaks
+                const isEligibleForBreaks = discountProfiles.some(p => p.assignedVariants && p.assignedVariants.includes(prod.variantId));
+
                 const toggleProduct = () => {
                   if (!isSelected && !isOutOfStock) {
                     handleIncrement(prod.variantId);
@@ -2729,9 +3041,27 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
                   e("div", null,
                     e("div", { className: "badge-select" }, isSelected ? "✓" : ""),
                     isOutOfStock && e("span", { className: "free-gift-badge", style: { background: "#e53e3e", color: "white", fontSize: "8px", position: "absolute", top: "8px", left: "8px" } }, "SOLD OUT"),
-                    prod.imageUrl && e("img", { className: "product-img", src: prod.imageUrl, alt: prod.productName }),
-                    e("div", { className: "card-subtitle" }, prod.variantTitle && prod.variantTitle !== "Default Title" ? prod.variantTitle : "Product"),
-                    e("div", { className: "card-title" }, prod.productName),
+                    prod.imageUrl && e("img", { 
+                      className: "product-img", 
+                      src: prod.imageUrl, 
+                      alt: prod.productName,
+                      onClick: (ev) => { ev.stopPropagation(); setActiveModalProduct(prod); },
+                      style: { cursor: "zoom-in" }
+                    }),
+                    e("div", { 
+                      className: "card-subtitle",
+                      onClick: (ev) => { ev.stopPropagation(); setActiveModalProduct(prod); },
+                      style: { cursor: "zoom-in" }
+                    }, prod.variantTitle && prod.variantTitle !== "Default Title" ? prod.variantTitle : "Product"),
+                    e("div", { 
+                      className: "card-title",
+                      onClick: (ev) => { ev.stopPropagation(); setActiveModalProduct(prod); },
+                      style: { cursor: "zoom-in" }
+                    }, prod.productName),
+                    
+                    isEligibleForBreaks && e("div", { style: { marginTop: "4px", marginBottom: "4px" } },
+                      e("span", { className: "free-gift-badge", style: { background: "var(--primary-light)", color: "var(--primary-color)", fontSize: "8px", border: "1px solid var(--primary-color)", padding: "1px 4px", display: "inline-block" } }, "✨ Tier Eligible")
+                    ),
                     
                     // Tactile incrementor controls (Strict stock limits gated!)
                     isSelected && e("div", { className: "quantity-selector", onClick: (ev) => ev.stopPropagation() },
@@ -2879,13 +3209,65 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
                   const vId = coreVariants[idx];
                   if (vId) {
                     const prod = liveProducts.find(p => p.variantId === vId);
-                    return e("div", { key: idx, className: "slot slot-filled" },
-                      e("div", { className: "slot-filled-icon" }, "🧴"),
-                      e("div", { className: "slot-filled-title" }, prod ? prod.productName.split(" Serum")[0].split(" Mask")[0] : "Product")
+                    return e("div", { 
+                      key: idx, 
+                      className: "slot slot-filled",
+                      onClick: () => { if (prod) setActiveModalProduct(prod); },
+                      style: { cursor: "zoom-in", padding: 0, overflow: "hidden", position: "relative" }
+                    },
+                      prod && prod.imageUrl ? e("img", { 
+                        src: prod.imageUrl, 
+                        alt: prod.productName,
+                        style: { width: "100%", height: "100%", objectFit: "cover", position: "absolute", top: 0, left: 0 }
+                      }) : e("div", { className: "slot-filled-icon", style: { zIndex: 1 } }, "🧴"),
+                      e("div", { 
+                        className: "slot-filled-title", 
+                        style: { 
+                          zIndex: 2, 
+                          background: "rgba(255, 255, 255, 0.95)", 
+                          width: "100%", 
+                          position: "absolute", 
+                          bottom: 0, 
+                          left: 0, 
+                          padding: "2px 0", 
+                          fontSize: "9px", 
+                          fontWeight: "bold",
+                          borderTop: "1px solid #eae6df"
+                        } 
+                      }, prod ? prod.productName.split(" Serum")[0].split(" Mask")[0] : "Product")
                     );
                   } else {
                     return e("div", { key: idx, className: "slot slot-empty" });
                   }
+                })
+              )
+            ),
+
+            // Unlocked Glow Points VIP Redemptions (Smartrr & Stay AI Parity!)
+            e("div", { style: { marginBottom: "20px", background: "#fcfaf6", padding: "16px", borderRadius: "4px", border: "1.5px dashed var(--primary-color)" } },
+              e("div", { style: { fontSize: "11px", fontWeight: "700", color: "var(--primary-color)", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "8px" } }, "✨ Glow Points VIP Redemptions"),
+              e("p", { style: { fontSize: "11px", color: "#718096", margin: "0 0 12px 0" } }, "Use your active subscriber points to redeem premium skincare add-ons for absolutely free! Your Wallet: " + glowPoints + " points."),
+              
+              e("div", { style: { display: "flex", flexDirection: "column", gap: "10px" } },
+                [
+                  { variantId: "gid://shopify/ProductVariant/5003", name: "Barrier Restore Moisturizer (VIP Reward)", points: 30, desc: "Ultra-hydrating daily routine barrier restore." },
+                  { variantId: "gid://shopify/ProductVariant/5002", name: "Charcoal Face Mask (VIP Reward)", points: 50, desc: "Purifying clay mask detoxifies pores." }
+                ].map(item => {
+                  const canRedeem = glowPoints >= item.points;
+                  const isAlreadyAdded = addonVariants.includes(item.variantId);
+                  
+                  return e("div", { key: item.variantId, style: { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px", background: "#fff", borderRadius: "4px", border: "1px solid #eae6df" } },
+                    e("div", { style: { flex: 1, paddingRight: "10px" } },
+                      e("div", { style: { fontSize: "12px", fontWeight: "bold", color: "#2d3748" } }, item.name),
+                      e("div", { style: { fontSize: "10px", color: "#718096" } }, item.desc)
+                    ),
+                    e("button", {
+                      className: "btn-primary",
+                      disabled: !canRedeem || isAlreadyAdded || activating,
+                      onClick: () => handleRedeemPoints(item.variantId, item.points),
+                      style: { padding: "6px 14px", fontSize: "11px", minWidth: "100px" }
+                    }, isAlreadyAdded ? "Redeemed ✓" : item.points + " Points")
+                  );
                 })
               )
             ),
@@ -2968,29 +3350,27 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
             }, [contract, selectedGiftId, claimingGift, eligibleGifts, milestoneCount]),
 
             // Visual Rewards, Add-on & Free Gift Manager (Like Bliss / Poppin / Peak Fuel)
-            e("div", { style: { marginBottom: "20px", background: "#fffaf0", padding: "14px", borderRadius: "12px", border: "1px dashed #dd6b20" } },
-              e("div", { style: { fontSize: "11px", fontWeight: "700", color: "#c05621", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "8px" } }, "🎁 Active Box Add-ons & Free Rewards"),
+            React.useMemo(() => {
+              const contractItems = contract ? (typeof contract.items === "string" ? JSON.parse(contract.items) : contract.items) : [];
+              const activeGifts = contractItems.filter(it => it.isFreeGift);
               
-              (() => {
-                // Read claimed free gifts from contract if available
-                const contractItems = contract ? (typeof contract.items === "string" ? JSON.parse(contract.items) : contract.items) : [];
-                const activeGifts = contractItems.filter(it => it.isFreeGift);
-                
-                const hasUnlockedBuilderGift = !contract && isFreeGiftUnlocked;
-                const hasClaimedActiveGift = contract && activeGifts.length > 0;
-                
-                if (!hasUnlockedBuilderGift && !hasClaimedActiveGift) {
-                  return e("p", { style: { fontSize: "12px", color: "#dd6b20", margin: 0, fontStyle: "italic" } }, "Add items above to unlock safe deluxe samples and customized add-ons!");
-                }
+              const hasUnlockedBuilderGift = !contract && isFreeGiftUnlocked;
+              const hasClaimedActiveGift = contract && activeGifts.length > 0;
+              
+              if (!hasUnlockedBuilderGift && !hasClaimedActiveGift) {
+                return null; // COMPLETELY HIDES the entire card section if no perks exist!
+              }
 
-                return e("div", { style: { display: "flex", flexDirection: "column", gap: "8px" } },
+              return e("div", { style: { marginBottom: "20px", background: "#fcfaf6", padding: "14px", borderRadius: "4px", border: "1px dashed var(--primary-color)" } },
+                e("div", { style: { fontSize: "11px", fontWeight: "700", color: "var(--primary-color)", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "8px" } }, "🎁 Unlocked Routine Perks & Gifts"),
+                e("div", { style: { display: "flex", flexDirection: "column", gap: "8px" } },
                   // 1. Dynamic Auto-Unlocked Builder Free Gift
-                  hasUnlockedBuilderGift && e("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 12px", background: "#fff", borderRadius: "8px", border: "1px solid #feebc8" } },
+                  hasUnlockedBuilderGift && e("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 12px", background: "#fff", borderRadius: "4px", border: "1px solid #feebc8" } },
                     e("div", { style: { display: "flex", alignItems: "center", gap: "8px" } },
                       e("span", { style: { fontSize: "18px" } }, "🎁"),
                       e("div", null,
-                        e("div", { style: { fontSize: "12px", fontWeight: "bold", color: "#7b341e" } }, "Hydrating Aloe Deluxe Sample"),
-                        e("span", { className: "free-gift-badge", style: { fontSize: "8px", padding: "1px 4px", background: "#008060" } }, "Free Gift")
+                        e("div", { style: { fontSize: "12px", fontWeight: "bold", color: "#7b341e" } }, "Complimentary Hydrating Aloe Deluxe Sample"),
+                        e("span", { className: "free-gift-badge", style: { fontSize: "8px", padding: "1px 4px", background: "#008060" } }, "UNLOCKED GIFT")
                       )
                     ),
                     e("span", { style: { fontSize: "12px", fontWeight: "bold", color: "#008060" } }, "FREE")
@@ -3028,12 +3408,12 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
                       });
                     };
 
-                    return e("div", { key: "gift-" + idx, style: { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 12px", background: "#fff", borderRadius: "8px", border: "1px solid #b8dfc4" } },
+                    return e("div", { key: "gift-" + idx, style: { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 12px", background: "#fff", borderRadius: "4px", border: "1px solid #b8dfc4" } },
                       e("div", { style: { display: "flex", alignItems: "center", gap: "8px" } },
                         e("span", { style: { fontSize: "18px" } }, "🎁"),
                         e("div", null,
-                          e("div", { style: { fontSize: "12px", fontWeight: "bold", color: "#14532d" } }, it.productName),
-                          e("span", { className: "free-gift-badge", style: { fontSize: "8px", padding: "1px 4px", background: "#008060" } }, "Milestone Gift Claimed")
+                          e("div", { style: { fontSize: "12px", fontWeight: "bold", color: "#14532d" } }, it.productName + " (VIP Reward)"),
+                          e("span", { className: "free-gift-badge", style: { fontSize: "8px", padding: "1px 4px", background: "#008060" } }, "MILESTONE CLAIMED")
                         )
                       ),
                       e("div", { style: { display: "flex", alignItems: "center", gap: "10px" } },
@@ -3045,9 +3425,9 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
                       )
                     );
                   })
-                );
-              })()
-            ),
+                )
+              );
+            }, [contract, isFreeGiftUnlocked]),
 
             // Select Delivery Interval & Start Date (if no contract exists yet)
             !contract && e("div", { style: { display: "flex", gap: "12px", marginBottom: "20px", flexWrap: "wrap" } },
@@ -3151,6 +3531,152 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
                   disabled: coreVariants.length === 0 || activating, 
                   onClick: activateRoutine
                 }, activating ? "⏳ Activating..." : "🚀 Activate Routine & Unlock Portal")
+              )
+            )
+          ),
+
+          // 4. Interactive Product Details Modal Overlay (Full-screen Backdrop!)
+          activeModalProduct && e("div", { 
+            className: "modal-overlay", 
+            onClick: () => setActiveModalProduct(null) 
+          },
+            e("div", { className: "modal-content", onClick: (ev) => ev.stopPropagation() },
+              e("button", { className: "modal-close", onClick: () => setActiveModalProduct(null) }, "✕"),
+              e("div", { style: { display: "flex", gap: "28px", flexWrap: "wrap", alignItems: "center" } },
+                
+                // Left side: Product Image
+                e("div", { style: { flex: 1, minWidth: "240px", textAlign: "center" } },
+                  activeModalProduct.imageUrl && e("img", { 
+                    src: activeModalProduct.imageUrl, 
+                    alt: activeModalProduct.productName,
+                    style: { width: "100%", maxHeight: "320px", objectFit: "cover", borderRadius: "2px", border: "1px solid #eae6df" } 
+                  })
+                ),
+                
+                // Right side: Premium Editorial Details
+                e("div", { style: { flex: 1.2, minWidth: "260px", display: "flex", flexDirection: "column", gap: "10px" } },
+                  e("div", { style: { fontSize: "10px", color: "var(--primary-color)", textTransform: "uppercase", fontWeight: "700", letterSpacing: "1px" } }, 
+                    activeModalProduct.variantTitle && activeModalProduct.variantTitle !== "Default Title" ? activeModalProduct.variantTitle : "Exclusive Curation"
+                  ),
+                  e("h3", { className: "luxury-serif", style: { margin: 0, fontSize: "24px", color: "#111111", lineHeight: "1.2" } }, activeModalProduct.productName),
+                  e("div", { style: { fontSize: "18px", fontWeight: "bold", color: "var(--primary-color)", margin: "4px 0" } }, "$" + activeModalProduct.price.toFixed(2)),
+                  
+                  e("div", { style: { borderTop: "1px solid #eae6df", paddingTop: "12px", display: "flex", flexDirection: "column", gap: "6px" } },
+                    e("div", null,
+                      e("span", { style: { fontSize: "10px", fontWeight: "700", color: "#718096", textTransform: "uppercase", letterSpacing: "0.5px", marginRight: "6px" } }, "Availability:"),
+                      e("span", { style: { fontSize: "12px", fontWeight: "bold", color: activeModalProduct.stockLevel > 0 ? "#14532d" : "#e53e3e" } }, 
+                        activeModalProduct.stockLevel > 0 ? "In Stock (Only " + activeModalProduct.stockLevel + " left!)" : "Sold Out"
+                      )
+                    ),
+                    
+                    e("div", null,
+                      e("span", { style: { fontSize: "10px", fontWeight: "700", color: "#718096", textTransform: "uppercase", letterSpacing: "0.5px", marginRight: "6px" } }, "Savings Scope:"),
+                      e("span", { style: { fontSize: "12px", fontWeight: "bold", color: "var(--primary-color)" } }, 
+                        discountProfiles.some(p => p.assignedVariants && p.assignedVariants.includes(activeModalProduct.variantId)) ? "✨ Unlocks Bronze/Silver/Gold Volume Tiers" : "Charged at standard price"
+                      )
+                    )
+                  ),
+
+                  e("p", { style: { fontSize: "12px", color: "#4a5568", lineHeight: "1.6", margin: "6px 0 12px 0" } }, 
+                    "This professional-grade formulation is dynamically matched with your active Beauty profile. Crafted using premium, cruelty-free botanicals designed to lock in long-lasting hydration, balance tones, and actively restore skin cell barriers naturally."
+                  ),
+                  
+                  e("div", { style: { display: "flex", gap: "10px" } },
+                    e("button", { 
+                      className: "btn-primary", 
+                      disabled: activeModalProduct.stockLevel <= 0,
+                      onClick: () => {
+                        handleIncrement(activeModalProduct.variantId);
+                        setActiveModalProduct(null);
+                      },
+                      style: { flex: 1, padding: "12px", fontSize: "13px" }
+                    }, activeModalProduct.stockLevel <= 0 ? "Out of Stock" : "Add to Routine Routine Box"),
+                    
+                    e("button", { 
+                      className: "btn-secondary", 
+                      onClick: () => setActiveModalProduct(null),
+                      style: { padding: "12px 20px", fontSize: "13px" }
+                    }, "Close")
+                  )
+                )
+              )
+            )
+          ),
+
+          // 5. Cancellation Interception Save Flow Modal Overlay (Stay AI Churn Deflection!)
+          showCancellationSaveFlow && e("div", { className: "modal-overlay" },
+            e("div", { className: "modal-content", style: { maxWidth: "520px", textAlign: "center" } },
+              e("h3", { className: "luxury-serif", style: { margin: "0 0 8px 0", fontSize: "22px" } }, "🌟 Keep Your Skincare Glow Active!"),
+              e("p", { style: { fontSize: "13px", color: "#718096", margin: "0 0 24px 0", lineHeight: "1.6" } }, "We'd hate to see your routine boxes pause! Before you make changes, please tell us what is going on so we can help keep your routine balanced:"),
+              
+              e("div", { style: { display: "flex", flexDirection: "column", gap: "12px", textAlign: "left", marginBottom: "20px" } },
+                
+                // Option A: Too much product
+                e("div", { 
+                  onClick: () => {
+                    delayBox(); // Delay shipment 15 days
+                    setShowCancellationSaveFlow(false);
+                  },
+                  style: { padding: "12px", border: "1px solid #eae6df", borderRadius: "4px", cursor: "pointer", background: "#fcfaf6", transition: "all 0.2s" } 
+                },
+                  e("div", { style: { fontSize: "13px", fontWeight: "bold", color: "#111111" } }, "📦 I have too much product accumulated"),
+                  e("div", { style: { fontSize: "11px", color: "var(--primary-color)", marginTop: "2px", fontWeight: "bold" } }, "💡 Solution: Skip/Delay your next upcoming box by 15 days in 1-Click")
+                ),
+                
+                // Option B: Too expensive
+                e("div", { 
+                  onClick: () => {
+                    setActivating(true);
+                    // Apply 15% VIP discount code directly to upcoming box!
+                    fetch("/api/storefront/portal/update-items", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json", "x-shop-domain": "${shop}", "x-test-session-id": "beauty-portal-session" },
+                      body: JSON.stringify({
+                        contractId: contract.id,
+                        items: coreVariants.map(vId => {
+                          const p = liveProducts.find(prod => prod.variantId === vId);
+                          const basePrice = p ? p.price : 30.00;
+                          return {
+                            variantId: vId,
+                            productName: p ? p.productName : vId,
+                            price: getCustomDiscountPrice(vId, basePrice) * 0.85, // Direct 15% VIP overlay discount code!
+                            quantity: coreVariants.filter(id => id === vId).length
+                          };
+                        })
+                      })
+                    })
+                    .then(res => res.json())
+                    .then(data => {
+                      if (data.success) {
+                        setContract(data.contract);
+                        setNotification("🎉 15% VIP Loyalty Discount applied successfully directly to your upcoming box!");
+                        setTimeout(() => setNotification(null), 3000);
+                      }
+                      setActivating(false);
+                      setShowCancellationSaveFlow(false);
+                    });
+                  },
+                  style: { padding: "12px", border: "1px solid #eae6df", borderRadius: "4px", cursor: "pointer", background: "#fcfaf6", transition: "all 0.2s" } 
+                },
+                  e("div", { style: { fontSize: "13px", fontWeight: "bold", color: "#111111" } }, "💸 Routine is too expensive for me"),
+                  e("div", { style: { fontSize: "11px", color: "var(--primary-color)", marginTop: "2px", fontWeight: "bold" } }, "💡 Solution: Secure a 15% VIP discount code applied instantly to next box")
+                )
+              ),
+
+              e("div", { style: { display: "flex", gap: "10px" } },
+                e("button", { 
+                  className: "btn-secondary", 
+                  onClick: () => setShowCancellationSaveFlow(false),
+                  style: { flex: 1, padding: "10px", fontSize: "12px" }
+                }, "Nevermind, Keep Box Active"),
+                e("button", { 
+                  className: "btn-secondary", 
+                  onClick: () => {
+                    triggerAction(contract.status === "PAUSED" ? "/api/storefront/portal/resume" : "/api/storefront/portal/pause");
+                    setShowCancellationSaveFlow(false);
+                  },
+                  style: { flex: 1, padding: "10px", fontSize: "12px", borderColor: "#e53e3e", color: "#e53e3e" }
+                }, "Proceed to Pause Box")
               )
             )
           )

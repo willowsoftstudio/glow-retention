@@ -55,6 +55,9 @@ model CustomerProfile {
   zipCode             String?             // Postal code for weather climate API lookups
   allergens           String[]            // Strictly filtered-out ingredients
   smsOptOut           Boolean             @default(false) // Legal TCPA compliance opt-out flag
+  magicLinkToken      String?
+  magicLinkExpires    DateTime?
+  glowPoints          Int                 @default(0)
   createdAt           DateTime            @default(now())
   updatedAt           DateTime            @updatedAt
 
