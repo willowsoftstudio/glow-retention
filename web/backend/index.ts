@@ -50,6 +50,73 @@ if (!isTestMode) {
   }
 }
 
+// Centralized Outbound Developer Twilio & WhatsApp Gateway (Live Production Ready!)
+const sendOutboundMessage = async (toPhone: string, textBody: string, isWhatsApp: boolean = false) => {
+  try {
+    const accountSid = process.env.TWILIO_ACCOUNT_SID || process.env.TWILIO_SID || "ACmockaccountsid1234567890abcdef";
+    const authToken = process.env.TWILIO_AUTH_TOKEN || process.env.TWILIO_SECRET || "mockauthtoken1234567890abcdef";
+    const rawFromNumber = isWhatsApp 
+      ? (process.env.TWILIO_WHATSAPP_NUMBER || "+15551234567")
+      : (process.env.TWILIO_PHONE_NUMBER || "+15551234567");
+
+    const fromNumber = isWhatsApp ? `whatsapp:${rawFromNumber}` : rawFromNumber;
+    const toNumber = isWhatsApp ? `whatsapp:${toPhone}` : toPhone;
+
+    // Pre-flight legal TCPA guard check (Outbound Interceptor block!)
+    const cleanTo = toPhone.replace(/\+/g, "").trim();
+    const profileCheck = await prisma.customerProfile.findFirst({
+      where: {
+        OR: [
+          { phone: toPhone },
+          { phone: cleanTo },
+          { phone: { endsWith: cleanTo.substring(1) } }
+        ]
+      }
+    });
+
+    if (profileCheck && profileCheck.smsOptOut) {
+      console.warn(`[Twilio Gateway Blocked] Outbound message aborted: Recipient ${toPhone} has opted out of SMS alerts.`);
+      return { success: false, error: "RECIPIENT_OPTED_OUT" };
+    }
+
+    console.log(`[Twilio Gateway Outbound] Sending ${isWhatsApp ? "WhatsApp" : "SMS"} to ${toNumber}...`);
+
+    if (accountSid.startsWith("ACmock")) {
+      console.log(`[Twilio Bypass Log] Simulated Outbound: To: ${toNumber}, From: ${fromNumber}, Body: "${textBody}"`);
+      return { success: true, sid: "SMmockmessagesid1234567890abcdef" };
+    }
+
+    const url = `https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Messages.json`;
+    const auth = Buffer.from(`${accountSid}:${authToken}`).toString("base64");
+
+    const body = new URLSearchParams({
+      From: fromNumber,
+      To: toNumber,
+      Body: textBody
+    });
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Authorization": `Basic ${auth}`,
+        "Content-Type": "application/x-www-form-urlencoded"
+      },
+      body: body.toString()
+    });
+
+    const data: any = await response.json();
+    if (!response.ok) {
+      throw new Error(data.message || "Unknown Twilio API error");
+    }
+
+    console.log(`[Twilio Live Success] Live message sent to ${toPhone}. SID: ${data.sid}`);
+    return { success: true, sid: data.sid };
+  } catch (err: any) {
+    console.error(`❌ [Twilio REST Gateway Error] Failed to send outbound message:`, err.message);
+    return { success: false, error: err.message };
+  }
+};
+
 // 1. Shopify OAuth Authentication Routes
 app.get(shopify.config.auth.path, shopify.auth.begin());
 
@@ -276,6 +343,37 @@ app.post("/api/webhooks/compliance", express.json(), async (req, res) => {
         return res.send("<Response><Message>GlowBot: Hi there! We couldn't locate an active skincare profile for your phone number in our database. Please complete your profile quiz first!</Message></Response>");
       }
 
+      // Legal SMS Compliance Interceptor (STOP / START keywords check - TCPA compliant!)
+      const cmd = Body.trim().toLowerCase();
+      const isStopWord = ["stop", "unsubscribe", "cancel", "quit"].includes(cmd);
+      const isStartWord = ["start", "unstop"].includes(cmd);
+
+      if (isStopWord) {
+        await prisma.customerProfile.update({
+          where: { id: profile.id },
+          data: { smsOptOut: true }
+        });
+        console.log(`[Twilio Webhook Compliance] Recipient ${From} successfully opted out of SMS notifications.`);
+        res.header("Content-Type", "text/xml");
+        return res.send("<Response><Message>You have successfully been unsubscribed. You will not receive any more messages from GlowBot. Reply START to resubscribe.</Message></Response>");
+      }
+
+      if (isStartWord) {
+        await prisma.customerProfile.update({
+          where: { id: profile.id },
+          data: { smsOptOut: false }
+        });
+        console.log(`[Twilio Webhook Compliance] Recipient ${From} successfully resubscribed to SMS notifications.`);
+        res.header("Content-Type", "text/xml");
+        return res.send("<Response><Message>Welcome back! You have successfully resubscribed to GlowBot SMS alerts. Reply HELP to see active commands.</Message></Response>");
+      }
+
+      if (profile.smsOptOut) {
+        console.warn(`[Twilio Webhook Blocked] Message from opted-out recipient ${From} was blocked.`);
+        res.header("Content-Type", "text/xml");
+        return res.send("<Response></Response>");
+      }
+
       // Locate their active subscription contract in the database
       const contract = await prisma.subscriptionContract.findFirst({
         where: { customerId: profile.customerId, shop: profile.shop }
@@ -288,7 +386,6 @@ app.post("/api/webhooks/compliance", express.json(), async (req, res) => {
       }
 
       let botText = "GlowBot: Command not recognized. Reply HELP to see list of options.";
-      const cmd = Body.trim().toLowerCase();
 
       if (cmd === "1") {
         // Delay next shipment by 30 days
@@ -1018,9 +1115,20 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
           "gid://shopify/ProductVariant/5002",
           "gid://shopify/ProductVariant/5003"
         ], // approved subscription add-ons by default
-        tier1Discount: 15,
-        tier2Discount: 20,
-        tier3Discount: 25
+        discountProfiles: [
+          {
+            id: "profile-default",
+            name: "Standard Skincare Breaks",
+            tier1: 15,
+            tier2: 20,
+            tier3: 25,
+            assignedVariants: [
+              "gid://shopify/ProductVariant/5001",
+              "gid://shopify/ProductVariant/5002",
+              "gid://shopify/ProductVariant/5003"
+            ]
+          }
+        ] // list of merchant-approved Custom Discount Profiles
       };
 
       if (fs.existsSync(configPath)) {
@@ -1044,7 +1152,7 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
   // POST /api/admin/theme-settings (Update theme colors and branding settings)
   app.post("/api/admin/theme-settings", async (req, res) => {
     try {
-      const { shop, themePrimaryColor, themeSecondaryColor, maxAddonLimit, minStartDateDays, eligibleAddonVariantIds, tier1Discount, tier2Discount, tier3Discount } = req.body;
+      const { shop, themePrimaryColor, themeSecondaryColor, maxAddonLimit, minStartDateDays, eligibleAddonVariantIds, discountProfiles } = req.body;
       if (!shop) {
         return res.status(400).json({ error: "Missing required shop parameter" });
       }
@@ -1068,6 +1176,20 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
         "gid://shopify/ProductVariant/5002",
         "gid://shopify/ProductVariant/5003"
       ];
+      const existingProfiles = allConfigs[shop]?.discountProfiles || [
+        {
+          id: "profile-default",
+          name: "Standard Skincare Breaks",
+          tier1: 15,
+          tier2: 20,
+          tier3: 25,
+          assignedVariants: [
+            "gid://shopify/ProductVariant/5001",
+            "gid://shopify/ProductVariant/5002",
+            "gid://shopify/ProductVariant/5003"
+          ]
+        }
+      ];
 
       allConfigs[shop] = {
         themePrimaryColor: themePrimaryColor || allConfigs[shop]?.themePrimaryColor || "#b89047",
@@ -1075,9 +1197,7 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
         maxAddonLimit: maxAddonLimit !== undefined ? parseInt(maxAddonLimit) : existingLimit,
         minStartDateDays: minStartDateDays !== undefined ? parseInt(minStartDateDays) : existingMinDate,
         eligibleAddonVariantIds: eligibleAddonVariantIds || existingAddons,
-        tier1Discount: tier1Discount !== undefined ? parseInt(tier1Discount) : (allConfigs[shop]?.tier1Discount || 15),
-        tier2Discount: tier2Discount !== undefined ? parseInt(tier2Discount) : (allConfigs[shop]?.tier2Discount || 20),
-        tier3Discount: tier3Discount !== undefined ? parseInt(tier3Discount) : (allConfigs[shop]?.tier3Discount || 25)
+        discountProfiles: discountProfiles || existingProfiles
       };
 
       fs.writeFileSync(configPath, JSON.stringify(allConfigs, null, 2), "utf-8");
@@ -1200,9 +1320,20 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
         "gid://shopify/ProductVariant/5002",
         "gid://shopify/ProductVariant/5003"
       ];
-      let tier1Discount = 15;
-      let tier2Discount = 20;
-      let tier3Discount = 25;
+      let discountProfiles = [
+        {
+          id: "profile-default",
+          name: "Standard Skincare Breaks",
+          tier1: 15,
+          tier2: 20,
+          tier3: 25,
+          assignedVariants: [
+            "gid://shopify/ProductVariant/5001",
+            "gid://shopify/ProductVariant/5002",
+            "gid://shopify/ProductVariant/5003"
+          ]
+        }
+      ];
 
       if (fs.existsSync(configPath)) {
         try {
@@ -1217,14 +1348,8 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
             if (allConfigs[shop].eligibleAddonVariantIds) {
               eligibleAddonVariantIds = allConfigs[shop].eligibleAddonVariantIds;
             }
-            if (allConfigs[shop].tier1Discount !== undefined) {
-              tier1Discount = parseInt(allConfigs[shop].tier1Discount);
-            }
-            if (allConfigs[shop].tier2Discount !== undefined) {
-              tier2Discount = parseInt(allConfigs[shop].tier2Discount);
-            }
-            if (allConfigs[shop].tier3Discount !== undefined) {
-              tier3Discount = parseInt(allConfigs[shop].tier3Discount);
+            if (allConfigs[shop].discountProfiles) {
+              discountProfiles = allConfigs[shop].discountProfiles;
             }
           }
         } catch (e) {
@@ -1743,9 +1868,7 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
       
       const milestoneCount = ${milestoneCount};
       const eligibleGifts = ${JSON.stringify(giftIds)};
-      const tier1Discount = ${tier1Discount};
-      const tier2Discount = ${tier2Discount};
-      const tier3Discount = ${tier3Discount};
+      const discountProfiles = ${JSON.stringify(discountProfiles)};
       const eligibleAddons = ${JSON.stringify(eligibleAddonVariantIds)};
 
       const [selectedGiftId, setSelectedGiftId] = React.useState("");
@@ -1800,9 +1923,28 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
       // Calculate dynamic quantities & prices
       const getProductQty = (vId) => selectedVariants.filter(id => id === vId).length;
 
+      // Dynamic custom discount price resolver based on merchant assigned profiles
+      const getCustomDiscountPrice = (vId, basePrice) => {
+        const profileMatch = discountProfiles.find(p => p.assignedVariants.includes(vId));
+        if (!profileMatch) return basePrice;
+
+        const combinedQtyInProfile = selectedVariants.reduce((sum, currentVId) => {
+          const isAssigned = profileMatch.assignedVariants.includes(currentVId);
+          return sum + (isAssigned ? 1 : 0);
+        }, 0);
+
+        const t1 = profileMatch.tier1 !== undefined ? profileMatch.tier1 : 0;
+        const t2 = profileMatch.tier2 !== undefined ? profileMatch.tier2 : 0;
+        const t3 = profileMatch.tier3 !== undefined ? profileMatch.tier3 : 0;
+
+        const disc = combinedQtyInProfile >= 4 ? t3 : (combinedQtyInProfile === 3 ? t2 : t1);
+        return basePrice * ((100 - disc) / 100);
+      };
+
       const totalPrice = selectedVariants.reduce((sum, vId) => {
         const prod = liveProducts.find(p => p.variantId === vId);
-        return sum + (prod ? prod.price : 0);
+        const basePrice = prod ? prod.price : 30.00;
+        return sum + getCustomDiscountPrice(vId, basePrice);
       }, 0);
 
       const handleIncrement = (vId) => {
@@ -1948,16 +2090,14 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
       const activateRoutine = () => {
         setActivating(true);
         const uniqueSelectedIds = [...new Set(selectedVariants)];
-        
-        // Calculate volume discount factor
-        const discountFactor = selectedVariants.length >= 4 ? (1 - tier3Discount / 100) : (selectedVariants.length === 3 ? (1 - tier2Discount / 100) : (1 - tier1Discount / 100));
 
         const itemsToCreate = uniqueSelectedIds.map(vId => {
           const p = liveProducts.find(prod => prod.variantId === vId);
+          const basePrice = p ? p.price : 30.00;
           return {
             variantId: p.variantId,
             productName: p.productName,
-            price: p.price * discountFactor, // Save correctly discounted volume price!
+            price: getCustomDiscountPrice(vId, basePrice), // Save correctly discounted volume price!
             quantity: getProductQty(vId)
           };
         });
@@ -2008,16 +2148,14 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
       const saveActiveRoutineEdits = () => {
         setActivating(true);
         const uniqueSelectedIds = [...new Set(selectedVariants)];
-        
-        // Calculate volume discount factor
-        const discountFactor = selectedVariants.length >= 4 ? (1 - tier3Discount / 100) : (selectedVariants.length === 3 ? (1 - tier2Discount / 100) : (1 - tier1Discount / 100));
 
         const itemsToSave = uniqueSelectedIds.map(vId => {
           const p = liveProducts.find(prod => prod.variantId === vId);
+          const basePrice = p ? p.price : 30.00;
           return {
             variantId: p.variantId,
             productName: p ? p.productName : vId,
-            price: (p ? p.price : 30.00) * discountFactor, // Save correctly discounted volume price!
+            price: getCustomDiscountPrice(vId, basePrice), // Save correctly discounted volume price!
             quantity: getProductQty(vId)
           };
         });
@@ -4194,6 +4332,7 @@ app.get("/", (req, res) => {
       const [adminTier2, setAdminTier2] = React.useState(20);
       const [adminTier3, setAdminTier3] = React.useState(25);
       const [adminAddons, setAdminAddons] = React.useState([]);
+      const [adminDiscountProfiles, setAdminDiscountProfiles] = React.useState([]);
 
       React.useEffect(() => {
         const d = new Date(Date.now() + parseInt(adminMinStartDateDays || "2") * 24 * 60 * 60 * 1000);
@@ -4559,10 +4698,8 @@ app.get("/", (req, res) => {
             if (data.themeSecondaryColor) setAdminThemeSecondary(data.themeSecondaryColor);
             if (data.maxAddonLimit !== undefined) setAdminMaxAddonLimit(data.maxAddonLimit.toString());
             if (data.minStartDateDays !== undefined) setAdminMinStartDateDays(data.minStartDateDays.toString());
-            if (data.tier1Discount !== undefined) setAdminTier1(data.tier1Discount);
-            if (data.tier2Discount !== undefined) setAdminTier2(data.tier2Discount);
-            if (data.tier3Discount !== undefined) setAdminTier3(data.tier3Discount);
             if (data.eligibleAddonVariantIds !== undefined) setAdminAddons(data.eligibleAddonVariantIds);
+            if (data.discountProfiles !== undefined) setAdminDiscountProfiles(data.discountProfiles);
           })
           .catch(() => {});
       };
@@ -4575,7 +4712,7 @@ app.get("/", (req, res) => {
         }
       };
 
-      const handleSaveThemeSettings = (primary, secondary, limit, minDays, t1, t2, t3, addons) => {
+      const handleSaveThemeSettings = (primary, secondary, limit, minDays, addons, profiles) => {
         fetch("/api/admin/theme-settings", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -4585,10 +4722,8 @@ app.get("/", (req, res) => {
             themeSecondaryColor: secondary,
             maxAddonLimit: parseInt(limit || "1"),
             minStartDateDays: parseInt(minDays || "2"),
-            tier1Discount: parseInt(t1 || "15"),
-            tier2Discount: parseInt(t2 || "20"),
-            tier3Discount: parseInt(t3 || "25"),
-            eligibleAddonVariantIds: addons
+            eligibleAddonVariantIds: addons,
+            discountProfiles: profiles
           })
         })
         .then(res => res.json())
@@ -4605,17 +4740,11 @@ app.get("/", (req, res) => {
               if (data.themeConfig.minStartDateDays !== undefined) {
                 setAdminMinStartDateDays(data.themeConfig.minStartDateDays.toString());
               }
-              if (data.themeConfig.tier1Discount !== undefined) {
-                setAdminTier1(data.themeConfig.tier1Discount);
-              }
-              if (data.themeConfig.tier2Discount !== undefined) {
-                setAdminTier2(data.themeConfig.tier2Discount);
-              }
-              if (data.themeConfig.tier3Discount !== undefined) {
-                setAdminTier3(data.themeConfig.tier3Discount);
-              }
               if (data.themeConfig.eligibleAddonVariantIds !== undefined) {
                 setAdminAddons(data.themeConfig.eligibleAddonVariantIds);
+              }
+              if (data.themeConfig.discountProfiles !== undefined) {
+                setAdminDiscountProfiles(data.themeConfig.discountProfiles);
               }
             }
           }
@@ -4687,6 +4816,7 @@ app.get("/", (req, res) => {
         return e("div", { className: "tab-header" },
           e("div", { className: "tab " + (activeTab === "churn" ? "active" : ""), onClick: () => setActiveTab("churn") }, "🔮 Churn Prediction Dashboard"),
           e("div", { className: "tab " + (activeTab === "curation" ? "active" : ""), onClick: () => setActiveTab("curation") }, "🎨 Box Curation"),
+          e("div", { className: "tab " + (activeTab === "breaks" ? "active" : ""), onClick: () => setActiveTab("breaks") }, "🔥 Discount Breaks"),
           e("div", { className: "tab " + (activeTab === "inventory" ? "active" : ""), onClick: () => setActiveTab("inventory") }, "📊 Inventory Analytics"),
           e("div", { className: "tab " + (activeTab === "quiz" ? "active" : ""), onClick: () => setActiveTab("quiz") }, "📋 Subscription Preference Quiz"),
           e("div", { className: "tab " + (activeTab === "milestones" ? "active" : ""), onClick: () => setActiveTab("milestones") }, "🎁 Milestones & Gifting"),
@@ -4954,6 +5084,123 @@ app.get("/", (req, res) => {
               );
             })
           )
+        );
+      };
+
+      const renderBreaksTab = () => {
+        if (plan === "STARTER") {
+          return e("div", { className: "card paywall-locked" },
+            e("div", { style: { fontSize: "40px" } }, "🔒"),
+            e("div", { className: "paywall-title" }, "Custom Discount Profiles Locked"),
+            e("div", { className: "paywall-desc" }, "Custom Discount Profiles are an Enterprise & Pro module that lets you create distinct quantity discount breaks per collection or custom items. Upgrade to unlock total margin protection!"),
+            e("button", { className: "button-primary", onClick: () => handleUpgradeBilling("PRO") }, "Upgrade to PRO Plan")
+          );
+        }
+
+        // Dynamic breaks profile creator dashboard UI (Unlocked!)
+        const handleProfileChange = (idx, field, value) => {
+          const copy = [...adminDiscountProfiles];
+          copy[idx][field] = value;
+          setAdminDiscountProfiles(copy);
+        };
+
+        const handleToggleProfileVariant = (pIdx, variantId) => {
+          const copy = [...adminDiscountProfiles];
+          const currentVariants = copy[pIdx].assignedVariants || [];
+          if (currentVariants.includes(variantId)) {
+            copy[pIdx].assignedVariants = currentVariants.filter(id => id !== variantId);
+          } else {
+            copy[pIdx].assignedVariants = [...currentVariants, variantId];
+          }
+          setAdminDiscountProfiles(copy);
+        };
+
+        const handleAddNewProfile = () => {
+          const newProfile = {
+            id: "profile_" + Date.now(),
+            name: "New Discount Profile",
+            tier1: 10,
+            tier2: 15,
+            tier3: 20,
+            assignedVariants: []
+          };
+          setAdminDiscountProfiles([...adminDiscountProfiles, newProfile]);
+        };
+
+        const handleDeleteProfile = (idx) => {
+          const copy = adminDiscountProfiles.filter((_, i) => i !== idx);
+          setAdminDiscountProfiles(copy);
+        };
+
+        return e("div", null,
+          e("div", { className: "card", style: { marginBottom: "20px" } },
+            e("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px" } },
+              e("h3", { style: { fontSize: "16px", fontWeight: "600", margin: 0 } }, "🔥 Custom Discount Breaks Profiles"),
+              e("button", { className: "button-primary", style: { padding: "6px 12px", fontSize: "11px" }, onClick: handleAddNewProfile }, "➕ Create New Profile")
+            ),
+            e("p", { style: { color: "#6d7175", fontSize: "13px", marginBottom: "20px" } }, "Configure custom multi-profile discount structures. Define specific quantity tiers (Bronze, Silver, Gold) per product group to optimize both cart sizes and profit margins simultaneously. (Note: 0% discount disables that tier break)."),
+            
+            adminDiscountProfiles.length === 0 ? 
+              e("div", { style: { textAlign: "center", padding: "30px", border: "1px dashed #cbd5e0", backgroundColor: "#fafbfb" } }, "No custom discount profiles created yet. Click 'Create New Profile' to begin.") :
+              
+              adminDiscountProfiles.map((p, pIdx) => {
+                return e("div", { key: p.id, className: "card", style: { border: "1.5px solid #eae6df", background: "#ffffff", padding: "20px", marginBottom: "16px", position: "relative" } },
+                  e("button", { 
+                    onClick: () => handleDeleteProfile(pIdx), 
+                    style: { position: "absolute", top: "12px", right: "12px", background: "none", border: "none", color: "#e53e3e", fontWeight: "bold", cursor: "pointer", fontSize: "14px" } 
+                  }, "✕ Delete Profile"),
+                  
+                  e("div", { style: { marginBottom: "16px" } },
+                    e("label", { style: { display: "block", fontSize: "11px", fontWeight: "bold", color: "#6d7175", textTransform: "uppercase", marginBottom: "4px" } }, "Profile Name"),
+                    e("input", { 
+                      type: "text", 
+                      value: p.name, 
+                      onChange: (ev) => handleProfileChange(pIdx, "name", ev.target.value),
+                      style: { width: "100%", maxWidth: "340px", padding: "8px", borderRadius: "4px", border: "1px solid #cbd5e0" } 
+                    })
+                  ),
+                  
+                  e("div", { style: { display: "flex", gap: "16px", flexWrap: "wrap", marginBottom: "16px" } },
+                    e("div", { style: { flex: 1, minWidth: "120px" } },
+                      e("label", { style: { display: "block", fontSize: "11px", fontWeight: "bold", color: "#6d7175", marginBottom: "4px" } }, "Bronze Tier (1-2 items) Discount (%)"),
+                      e("input", { type: "number", min: "0", max: "90", value: p.tier1, onChange: (ev) => handleProfileChange(pIdx, "tier1", parseInt(ev.target.value) || 0), style: { width: "100%", padding: "8px", borderRadius: "4px", border: "1px solid #cbd5e0" } })
+                    ),
+                    e("div", { style: { flex: 1, minWidth: "120px" } },
+                      e("label", { style: { display: "block", fontSize: "11px", fontWeight: "bold", color: "#6d7175", marginBottom: "4px" } }, "Silver Tier (3 items) Discount (%)"),
+                      e("input", { type: "number", min: "0", max: "90", value: p.tier2, onChange: (ev) => handleProfileChange(pIdx, "tier2", parseInt(ev.target.value) || 0), style: { width: "100%", padding: "8px", borderRadius: "4px", border: "1px solid #cbd5e0" } })
+                    ),
+                    e("div", { style: { flex: 1, minWidth: "120px" } },
+                      e("label", { style: { display: "block", fontSize: "11px", fontWeight: "bold", color: "#6d7175", marginBottom: "4px" } }, "Gold Tier (4+ items) Discount (%)"),
+                      e("input", { type: "number", min: "0", max: "90", value: p.tier3, onChange: (ev) => handleProfileChange(pIdx, "tier3", parseInt(ev.target.value) || 0), style: { width: "100%", padding: "8px", borderRadius: "4px", border: "1px solid #cbd5e0" } })
+                    )
+                  ),
+                  
+                  // Visual Variant Assigner checkbox checklist inside custom profile!
+                  e("div", null,
+                    e("label", { style: { display: "block", fontSize: "11px", fontWeight: "bold", color: "#6d7175", textTransform: "uppercase", marginBottom: "6px" } }, "Assign Product Variants to this Profile"),
+                    e("div", { style: { display: "flex", gap: "12px", flexWrap: "wrap", padding: "10px", border: "1px solid #cbd5e0", borderRadius: "4px", backgroundColor: "#fafbfb" } },
+                      inventory.map((item, idx) => {
+                        const isAssigned = (p.assignedVariants || []).includes(item.productId);
+                        return e("div", { key: idx, style: { display: "flex", alignItems: "center" } },
+                          e("input", { 
+                            type: "checkbox", 
+                            id: "assign_" + pIdx + "_" + idx, 
+                            checked: isAssigned, 
+                            onChange: () => handleToggleProfileVariant(pIdx, item.productId),
+                            style: { marginRight: "6px" } 
+                          }),
+                          e("label", { htmlFor: "assign_" + pIdx + "_" + idx, style: { cursor: "pointer", fontSize: "12px" } }, 
+                            formatProductName(item.productName || item.productId)
+                          )
+                        );
+                      })
+                    )
+                  )
+                );
+              })
+          ),
+          
+          adminDiscountProfiles.length > 0 && e("button", { className: "button-primary", onClick: () => handleSaveThemeSettings(adminThemePrimary, adminThemeSecondary, adminMaxAddonLimit, adminMinStartDateDays, adminAddons, adminDiscountProfiles) }, "💾 Save Custom Discount Profiles")
         );
       };
 
@@ -5774,26 +6021,6 @@ app.get("/", (req, res) => {
               )
             ),
 
-            // Exposing Competitor Pricing Breaks Inputs (Competitor Parity - Kaching style)
-            e("div", { style: { borderTop: "1px solid #cbd5e0", paddingTop: "16px", marginTop: "16px", marginBottom: "16px" } },
-              e("h4", { style: { fontSize: "14px", fontWeight: "600", color: "#2c3e50", marginBottom: "8px" } }, "🔥 Configure Quantity Breaks Discounts (%)"),
-              e("p", { style: { color: "#6d7175", fontSize: "12px", marginBottom: "12px" } }, "Globally define the Kaching-style volume breaks percentage discounts dynamically displayed and applied in the visual cart checkout and portal."),
-              e("div", { style: { display: "flex", gap: "16px", flexWrap: "wrap" } },
-                e("div", { style: { flex: 1, minWidth: "140px" } },
-                  e("label", { style: { display: "block", fontSize: "11px", fontWeight: "bold", color: "#4a5568", marginBottom: "4px" } }, "Bronze Tier (1-2 items) Discount (%)"),
-                  e("input", { type: "number", min: "0", max: "90", value: adminTier1, onChange: (ev) => setAdminTier1(parseInt(ev.target.value) || 0), style: { width: "100%", padding: "8px", borderRadius: "4px", border: "1px solid #cbd5e0" } })
-                ),
-                e("div", { style: { flex: 1, minWidth: "140px" } },
-                  e("label", { style: { display: "block", fontSize: "11px", fontWeight: "bold", color: "#4a5568", marginBottom: "4px" } }, "Silver Tier (3 items) Discount (%)"),
-                  e("input", { type: "number", min: "0", max: "90", value: adminTier2, onChange: (ev) => setAdminTier2(parseInt(ev.target.value) || 0), style: { width: "100%", padding: "8px", borderRadius: "4px", border: "1px solid #cbd5e0" } })
-                ),
-                e("div", { style: { flex: 1, minWidth: "140px" } },
-                  e("label", { style: { display: "block", fontSize: "11px", fontWeight: "bold", color: "#4a5568", marginBottom: "4px" } }, "Gold Tier (4+ items) Discount (%)"),
-                  e("input", { type: "number", min: "0", max: "90", value: adminTier3, onChange: (ev) => setAdminTier3(parseInt(ev.target.value) || 0), style: { width: "100%", padding: "8px", borderRadius: "4px", border: "1px solid #cbd5e0" } })
-                )
-              )
-            ),
-
             // Exposing Allowed Add-Ons Catalog Selection checklist
             e("div", { style: { borderTop: "1px solid #cbd5e0", paddingTop: "16px", marginBottom: "20px" } },
               e("h4", { style: { fontSize: "14px", fontWeight: "600", color: "#2c3e50", marginBottom: "8px" } }, "🛍️ Configure Allowed Subscription Add-Ons Catalog"),
@@ -5817,7 +6044,7 @@ app.get("/", (req, res) => {
               )
             ),
 
-            e("button", { className: "button-primary", onClick: () => handleSaveThemeSettings(adminThemePrimary, adminThemeSecondary, adminMaxAddonLimit, adminMinStartDateDays, adminTier1, adminTier2, adminTier3, adminAddons) }, "💾 Save Custom Portal Settings")
+            e("button", { className: "button-primary", onClick: () => handleSaveThemeSettings(adminThemePrimary, adminThemeSecondary, adminMaxAddonLimit, adminMinStartDateDays, adminAddons, adminDiscountProfiles) }, "💾 Save Custom Portal Settings")
           )
         );
       };
@@ -5832,6 +6059,7 @@ app.get("/", (req, res) => {
           renderTabs(),
           activeTab === "churn" && renderChurnTab(),
           activeTab === "curation" && renderCurationTab(),
+          activeTab === "breaks" && renderBreaksTab(),
           activeTab === "inventory" && renderInventoryTab(),
           activeTab === "quiz" && renderQuizTab(),
           activeTab === "milestones" && renderMilestonesTab(),

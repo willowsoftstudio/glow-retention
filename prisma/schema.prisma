@@ -43,6 +43,7 @@ model CustomerProfile {
   shop                String              // Associated merchant shop domain
   name                String?
   email               String?
+  phone               String?             // Subscriber mobile phone number
   skinType            String?             // e.g., "dry", "oily", "sensitive"
   concerns            String[]            // e.g., ["acne", "aging", "redness"]
   fragrancePreference String?             // e.g., "floral", "none"
@@ -53,6 +54,7 @@ model CustomerProfile {
   localClimate        String?             // e.g., "dry", "humid"
   zipCode             String?             // Postal code for weather climate API lookups
   allergens           String[]            // Strictly filtered-out ingredients
+  smsOptOut           Boolean             @default(false) // Legal TCPA compliance opt-out flag
   createdAt           DateTime            @default(now())
   updatedAt           DateTime            @updatedAt
 
