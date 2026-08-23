@@ -2754,7 +2754,7 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
                   )
                 )
               );
-            }, [selectedVariants, discountProfiles]),
+            }, [coreVariants, discountProfiles]),
 
             // Visual Slots showing chosen items (Core Recurring subscription Box!)
             e("div", { style: { marginBottom: "20px", textAlign: "center", background: "#f8fafc", padding: "12px", borderRadius: "12px", border: "1px solid #e2e8f0" } },
