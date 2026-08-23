@@ -1401,7 +1401,7 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
     }
     #app {
       width: 95%;
-      max-width: 1250px;
+      max-width: 1400px;
       margin: 40px auto;
       background: white;
       border-radius: 4px; /* sharp editorial corners */
@@ -1882,6 +1882,8 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
 
       const [selectedGiftId, setSelectedGiftId] = React.useState("");
       const [claimingGift, setClaimingGift] = React.useState(false);
+
+      const [activeStorefrontTab, setActiveStorefrontTab] = React.useState("curation");
 
       // Split visual routine selections: core subscription variants vs. one-time addon variants
       const [coreVariants, setCoreVariants] = React.useState(() => {
@@ -2410,8 +2412,34 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
 
         notification && e("div", { className: "notification" }, notification),
 
-        // Dual-Column Grid Dashboard
-        e("div", { className: "dashboard-layout" },
+        // Widescreen Premium Luxury Tab Bar Selector
+        e("div", { style: { display: "flex", borderBottom: "1px solid #eae6df", marginBottom: "28px", gap: "24px" } },
+          [
+            { id: "curation", label: "📦 My Box Curation" },
+            { id: "dna", label: "🔮 Skincare DNA" },
+            { id: "shipments", label: "📅 Shipments & Billing" }
+          ].map(t => {
+            const active = activeStorefrontTab === t.id;
+            return e("div", { 
+              key: t.id,
+              onClick: () => setActiveStorefrontTab(t.id),
+              style: { 
+                fontSize: "12px", 
+                fontWeight: active ? "700" : "500", 
+                color: active ? "#111111" : "#718096", 
+                borderBottom: active ? "2.5px solid var(--primary-color)" : "2.5px solid transparent", 
+                paddingBottom: "10px", 
+                cursor: "pointer", 
+                textTransform: "uppercase",
+                letterSpacing: "1px",
+                transition: "all 0.3s"
+              } 
+            }, t.label);
+          })
+        ),
+
+        // Tab View 2: Skincare & Beauty DNA
+        activeStorefrontTab === "dna" && e("div", { style: { maxWidth: "800px", margin: "0 auto" } },
           
           // COLUMN 1: Preference Engine (Skin Profile)
           e("div", null,
@@ -2595,50 +2623,53 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
 
                 e("p", { style: { fontSize: "11px", color: "#718096", marginTop: "12px", fontStyle: "italic" } }, "💡 Your customized skincare routine box and recommendations update in real-time based on your saved Skincare & Beauty DNA.")
               )
-            ),
+            )
+          )
+        ),
 
-            // stay AI Active Subscription Manager Details
-            contract && e("div", null,
-              e("div", { className: "section-title" }, "📅 Scheduled Shipments"),
-              e("div", { className: "card" },
-                e("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center" } },
-                  e("div", { style: { fontSize: "11px", color: "#6d7175" } }, "Next Shipment Date"),
-                  e("button", { 
-                    onClick: () => setIsRescheduling(!isRescheduling),
-                    className: "edit-btn",
-                    style: { fontSize: "10px" }
-                  }, isRescheduling ? "Cancel" : "✏️ Reschedule")
-                ),
-                e("div", { style: { fontSize: "16px", fontWeight: "bold", color: "#2c3e50", marginTop: "2px" } }, new Date(contract.nextBillDate).toLocaleDateString()),
-                e("div", { style: { fontSize: "11px", color: "#6d7175", marginTop: "4px" } }, "Frequency: every " + contract.frequencyDays + " days"),
-                
-                // Rescheduling console
-                isRescheduling && e("div", { style: { borderTop: "1px dashed var(--primary-color)", marginTop: "10px", paddingTop: "10px" } },
-                  e("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" } },
-                    e("span", { style: { fontSize: "11px", fontWeight: "bold", color: "var(--primary-color)" } }, "Pick New Start Date"),
-                    e("button", { 
-                      onClick: () => {
-                        const standardDate = new Date(Date.now() + contract.frequencyDays * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
-                        triggerAction("/api/storefront/portal/postpone", { days: 0, date: standardDate });
-                        setIsRescheduling(false);
-                      },
-                      style: { background: "none", border: "none", color: "#718096", fontSize: "10px", fontWeight: "bold", cursor: "pointer", textDecoration: "underline" }
-                    }, "🔄 Revert to standard")
-                  ),
-                  e("div", { style: { display: "flex", gap: "8px" } },
-                    e("input", { 
-                      type: "date", 
-                      min: getMinDateStr(),
-                      value: contract.nextBillDate ? new Date(contract.nextBillDate).toISOString().split("T")[0] : getMinDateStr(),
-                      onChange: (ev) => {
-                        triggerAction("/api/storefront/portal/postpone", { days: 0, date: ev.target.value });
-                        setIsRescheduling(false);
-                      },
-                      style: { width: "100%", padding: "6px", borderRadius: "6px", border: "1px solid #cbd5e0", fontSize: "13px", outline: "none", boxSizing: "border-box" }
-                    })
-                  )
-                )
+        // Tab View 3: Shipments & Billing
+        activeStorefrontTab === "shipments" && e("div", { style: { maxWidth: "800px", margin: "0 auto" } },
+          e("div", null,
+            e("div", { className: "section-title" }, "📅 Scheduled Shipments & Billing"),
+            e("div", { className: "card" },
+              e("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center" } },
+                e("div", { style: { fontSize: "11px", color: "#6d7175" } }, "Next Shipment Date"),
+                e("button", { 
+                  onClick: () => setIsRescheduling(!isRescheduling),
+                  className: "edit-btn",
+                  style: { fontSize: "10px" }
+                }, isRescheduling ? "Cancel" : "✏️ Reschedule")
               ),
+              e("div", { style: { fontSize: "16px", fontWeight: "bold", color: "#2c3e50", marginTop: "2px" } }, new Date(contract.nextBillDate).toLocaleDateString()),
+              e("div", { style: { fontSize: "11px", color: "#6d7175", marginTop: "4px" } }, "Frequency: every " + contract.frequencyDays + " days"),
+              
+              // Rescheduling console
+              isRescheduling && e("div", { style: { borderTop: "1px dashed var(--primary-color)", marginTop: "10px", paddingTop: "10px" } },
+                e("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" } },
+                  e("span", { style: { fontSize: "11px", fontWeight: "bold", color: "var(--primary-color)" } }, "Pick New Start Date"),
+                  e("button", { 
+                    onClick: () => {
+                      const standardDate = new Date(Date.now() + contract.frequencyDays * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
+                      triggerAction("/api/storefront/portal/postpone", { days: 0, date: standardDate });
+                      setIsRescheduling(false);
+                    },
+                    style: { background: "none", border: "none", color: "#718096", fontSize: "10px", fontWeight: "bold", cursor: "pointer", textDecoration: "underline" }
+                  }, "🔄 Revert to standard")
+                ),
+                e("div", { style: { display: "flex", gap: "8px" } },
+                  e("input", { 
+                    type: "date", 
+                    min: getMinDateStr(),
+                    value: contract.nextBillDate ? new Date(contract.nextBillDate).toISOString().split("T")[0] : getMinDateStr(),
+                    onChange: (ev) => {
+                      triggerAction("/api/storefront/portal/postpone", { days: 0, date: ev.target.value });
+                      setIsRescheduling(false);
+                    },
+                    style: { width: "100%", padding: "6px", borderRadius: "6px", border: "1px solid #cbd5e0", fontSize: "13px", outline: "none", boxSizing: "border-box" }
+                  })
+                )
+              )
+            ),
               e("div", { className: "grid" },
                 e("button", { className: "btn-secondary", onClick: skipBox }, "⏭️ Skip Box"),
                 e("button", { className: "btn-secondary", onClick: delayBox }, "📅 Delay 15d")
@@ -2651,9 +2682,94 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
                 e("button", { className: "btn-primary", onClick: addDynamicAddOn }, "🛍️ + Personalized Add-on")
               )
             )
+          )
+        ),
+
+        // Tab View 1: My Box Curation (Spacious Widescreen Routine slots & Catalog side-by-side!)
+        activeStorefrontTab === "curation" && e("div", { className: "dashboard-layout" },
+          
+          // Column 1: Search, filter & Catalog product-grid (spacious left column!)
+          e("div", null,
+            e("div", { className: "section-title" }, "🛍️ Glow Skincare Catalog"),
+            e("div", { style: { display: "flex", gap: "10px", marginBottom: "16px" } },
+              e("input", { 
+                type: "text", 
+                value: searchQuery, 
+                placeholder: "Search skincare, serums, cleansers...", 
+                onChange: (ev) => setSearchQuery(ev.target.value),
+                style: { flex: 1, padding: "10px", borderRadius: "4px", border: "1px solid #eae6df", fontSize: "13px", outline: "none", boxSizing: "border-box" } 
+              }),
+              e("div", { style: { display: "flex", alignItems: "center", gap: "6px" } },
+                e("input", { 
+                  type: "checkbox", 
+                  id: "strict_filter_checkbox", 
+                  checked: strictFilter, 
+                  onChange: () => setStrictFilter(!strictFilter),
+                  style: { cursor: "pointer" } 
+                }),
+                e("label", { htmlFor: "strict_filter_checkbox", style: { fontSize: "12px", fontWeight: "700", color: "#4a5568", textTransform: "uppercase", letterSpacing: "0.5px", cursor: "pointer" } }, "🛡️ Filter by Profile")
+              )
+            ),
+            // Catalog Grid
+            e("div", { className: "product-grid" },
+              pipelineData.products.map((prod) => {
+                const qty = getProductQty(prod.variantId);
+                const isSelected = qty > 0;
+                const isOutOfStock = prod.stockLevel !== undefined && prod.stockLevel <= 0;
+                const toggleProduct = () => {
+                  if (!isSelected && !isOutOfStock) {
+                    handleIncrement(prod.variantId);
+                  }
+                };
+                return e("div", { 
+                  key: prod.variantId, 
+                  onClick: toggleProduct,
+                  className: "product-card " + (isSelected ? "selected" : ""),
+                  style: isOutOfStock ? { opacity: 0.65, background: "#f8fafc", cursor: "not-allowed", border: "1px dashed #cbd5e0" } : {}
+                },
+                  e("div", null,
+                    e("div", { className: "badge-select" }, isSelected ? "✓" : ""),
+                    isOutOfStock && e("span", { className: "free-gift-badge", style: { background: "#e53e3e", color: "white", fontSize: "8px", position: "absolute", top: "8px", left: "8px" } }, "SOLD OUT"),
+                    prod.imageUrl && e("img", { className: "product-img", src: prod.imageUrl, alt: prod.productName }),
+                    e("div", { className: "card-subtitle" }, prod.variantTitle && prod.variantTitle !== "Default Title" ? prod.variantTitle : "Product"),
+                    e("div", { className: "card-title" }, prod.productName),
+                    
+                    // Tactile incrementor controls (Strict stock limits gated!)
+                    isSelected && e("div", { className: "quantity-selector", onClick: (ev) => ev.stopPropagation() },
+                      e("button", { className: "quantity-btn", onClick: () => handleDecrement(prod.variantId) }, "-"),
+                      e("span", { className: "quantity-count" }, qty),
+                      e("button", { 
+                        className: "quantity-btn", 
+                        disabled: isOutOfStock || qty >= (prod.stockLevel !== undefined ? prod.stockLevel : 999), 
+                        onClick: () => handleIncrement(prod.variantId) 
+                      }, "+")
+                    )
+                  ),
+                  e("div", { className: "price-tag" }, isOutOfStock ? "Out of Stock" : "$" + prod.price.toFixed(2))
+                );
+              })
+            ),
+            // Catalog Pagination controls
+            pipelineData.totalPages > 1 && e("div", { style: { display: "flex", justifyContent: "center", alignItems: "center", gap: "16px", marginTop: "16px", marginBottom: "20px" } },
+              e("button", { 
+                className: "btn-secondary", 
+                disabled: currentPage === 1,
+                onClick: () => setCurrentPage(currentPage - 1),
+                style: { padding: "6px 12px", fontSize: "12px", cursor: currentPage === 1 ? "not-allowed" : "pointer" }
+              }, "◀ Prev"),
+              e("span", { style: { fontSize: "12px", fontWeight: "700", color: "#4a5568" } }, 
+                "Page " + currentPage + " of " + pipelineData.totalPages
+              ),
+              e("button", { 
+                className: "btn-secondary", 
+                disabled: currentPage === pipelineData.totalPages,
+                onClick: () => setCurrentPage(currentPage + 1),
+                style: { padding: "6px 12px", fontSize: "12px", cursor: currentPage === pipelineData.totalPages ? "not-allowed" : "pointer" }
+              }, "Next ▶")
+            )
           ),
 
-          // COLUMN 2: Routine Builder & Manager Grid
+          // Column 2: visual Slots, breaks widget, add-ons list, and pricing footer (spacious right column!)
           e("div", null,
             e("div", { className: "section-title" }, contract ? "📦 Customize Upcoming Box" : "🛍️ Build Your Dynamic Box"),
             
@@ -2932,88 +3048,6 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
                   })
                 );
               })()
-            ),
-
-            // Search & Filter controls
-            e("div", { style: { display: "flex", flexWrap: "wrap", gap: "12px", alignItems: "center", marginBottom: "16px", padding: "12px", background: "#f8fafc", borderRadius: "10px", border: "1px solid #e2e8f0" } },
-              e("div", { style: { flex: 1, minWidth: "160px" } },
-                e("input", { 
-                  type: "text", 
-                  value: searchQuery, 
-                  onChange: (ev) => setSearchQuery(ev.target.value),
-                  placeholder: "🔍 Search products...",
-                  style: { width: "100%", padding: "8px 12px", borderRadius: "6px", border: "1px solid #cbd5e0", fontSize: "13px", outline: "none", boxSizing: "border-box" }
-                })
-              ),
-              e("div", { style: { display: "flex", alignItems: "center", gap: "6px" } },
-                e("input", { 
-                  id: "strict_filter_checkbox",
-                  type: "checkbox", 
-                  checked: strictFilter, 
-                  onChange: (ev) => setStrictFilter(ev.target.checked),
-                  style: { cursor: "pointer" }
-                }),
-                e("label", { htmlFor: "strict_filter_checkbox", style: { fontSize: "12px", fontWeight: "700", color: "#4a5568", textTransform: "uppercase", letterSpacing: "0.5px", cursor: "pointer" } }, "🛡️ Filter by Skin Profile")
-              )
-            ),
-
-            // Catalog Grid
-            e("div", { className: "product-grid" },
-              pipelineData.products.map((prod) => {
-                const qty = getProductQty(prod.variantId);
-                const isSelected = qty > 0;
-                const isOutOfStock = prod.stockLevel !== undefined && prod.stockLevel <= 0;
-                const toggleProduct = () => {
-                  if (!isSelected && !isOutOfStock) {
-                    handleIncrement(prod.variantId);
-                  }
-                };
-                return e("div", { 
-                  key: prod.variantId, 
-                  onClick: toggleProduct,
-                  className: "product-card " + (isSelected ? "selected" : ""),
-                  style: isOutOfStock ? { opacity: 0.65, background: "#f8fafc", cursor: "not-allowed", border: "1px dashed #cbd5e0" } : {}
-                },
-                  e("div", null,
-                    e("div", { className: "badge-select" }, isSelected ? "✓" : ""),
-                    isOutOfStock && e("span", { className: "free-gift-badge", style: { background: "#e53e3e", color: "white", fontSize: "8px", position: "absolute", top: "8px", left: "8px" } }, "SOLD OUT"),
-                    prod.imageUrl && e("img", { className: "product-img", src: prod.imageUrl, alt: prod.productName }),
-                    e("div", { className: "card-subtitle" }, prod.variantTitle && prod.variantTitle !== "Default Title" ? prod.variantTitle : "Product"),
-                    e("div", { className: "card-title" }, prod.productName),
-                    
-                    // Tactile incrementor controls (Strict stock limits gated!)
-                    isSelected && e("div", { className: "quantity-selector", onClick: (ev) => ev.stopPropagation() },
-                      e("button", { className: "quantity-btn", onClick: () => handleDecrement(prod.variantId) }, "-"),
-                      e("span", { className: "quantity-count" }, qty),
-                      e("button", { 
-                        className: "quantity-btn", 
-                        disabled: isOutOfStock || qty >= (prod.stockLevel !== undefined ? prod.stockLevel : 999), 
-                        onClick: () => handleIncrement(prod.variantId) 
-                      }, "+")
-                    )
-                  ),
-                  e("div", { className: "price-tag" }, isOutOfStock ? "Out of Stock" : "$" + prod.price.toFixed(2))
-                );
-              })
-            ),
-
-            // Catalog Pagination controls
-            pipelineData.totalPages > 1 && e("div", { style: { display: "flex", justifyContent: "center", alignItems: "center", gap: "16px", marginTop: "16px", marginBottom: "20px" } },
-              e("button", { 
-                className: "btn-secondary", 
-                disabled: currentPage === 1,
-                onClick: () => setCurrentPage(currentPage - 1),
-                style: { padding: "6px 12px", fontSize: "12px", cursor: currentPage === 1 ? "not-allowed" : "pointer" }
-              }, "◀ Prev"),
-              e("span", { style: { fontSize: "12px", fontWeight: "700", color: "#4a5568" } }, 
-                "Page " + currentPage + " of " + pipelineData.totalPages
-              ),
-              e("button", { 
-                className: "btn-secondary", 
-                disabled: currentPage === pipelineData.totalPages,
-                onClick: () => setCurrentPage(currentPage + 1),
-                style: { padding: "6px 12px", fontSize: "12px", cursor: currentPage === pipelineData.totalPages ? "not-allowed" : "pointer" }
-              }, "Next ▶")
             ),
 
             // Select Delivery Interval & Start Date (if no contract exists yet)
