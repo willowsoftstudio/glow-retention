@@ -423,12 +423,21 @@ app.post("/api/webhooks/compliance", express.json(), async (req, res) => {
           } catch (e) {}
         }
 
-        // Real dynamic catalog list with dynamic stock levels (Simple Bundles parity)
-        const MOCK_CATALOG = [
-          { variantId: "gid://shopify/ProductVariant/5001", productName: "Vitamin C Brightening Serum", price: 30.00, stockLevel: 25 },
-          { variantId: "gid://shopify/ProductVariant/5002", productName: "Charcoal Face Mask", price: 35.00, stockLevel: 0 }, // OUT OF STOCK!
-          { variantId: "gid://shopify/ProductVariant/5003", productName: "Barrier Restore Moisturizer", price: 25.00, stockLevel: 100 }
-        ];
+        // Real dynamic database catalog loaded from PostgreSQL (Simple Bundles & Dev-Owned keys parity!)
+        const dbInventory = await prisma.inventoryAnalytics.findMany();
+        const liveCatalog = dbInventory.map(inv => {
+          let name = "Deluxe Skincare Product";
+          if (inv.productId === "gid://shopify/ProductVariant/5001") name = "Vitamin C Brightening Serum";
+          else if (inv.productId === "gid://shopify/ProductVariant/5002") name = "Charcoal Face Mask";
+          else if (inv.productId === "gid://shopify/ProductVariant/5003") name = "Barrier Restore Moisturizer";
+          
+          return {
+            variantId: inv.productId,
+            productName: name,
+            price: inv.price,
+            stockLevel: inv.stockLevel || 0
+          };
+        });
 
         // Parse customer profile concerns, skin types, and active allergen exclusions
         const profileConcerns = (profile.concerns || []).map(c => c.toLowerCase());
@@ -437,7 +446,7 @@ app.post("/api/webhooks/compliance", express.json(), async (req, res) => {
         let currentItems = JSON.parse(contract.items || "[]");
 
         // Filter catalog based on stock level, merchant approved list, allergen exclusions, and uniqueness
-        const candidates = MOCK_CATALOG.filter(prod => {
+        const candidates = liveCatalog.filter(prod => {
           if (!eligibleAddonVariantIds.includes(prod.variantId)) return false;
           if (prod.stockLevel <= 0) return false; // STRICT INVENTORY GATING!
           const alreadyHas = currentItems.some((it: any) => it.variantId === prod.variantId);
@@ -1392,7 +1401,7 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
     }
     #app {
       width: 95%;
-      max-width: 1050px;
+      max-width: 1250px;
       margin: 40px auto;
       background: white;
       border-radius: 4px; /* sharp editorial corners */
@@ -1910,12 +1919,6 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
       const [customStartDate, setCustomStartDate] = React.useState(getMinDateStr());
       const [isRescheduling, setIsRescheduling] = React.useState(false);
 
-      // GlowBot Chat Assistant states
-      const [chatMessages, setChatMessages] = React.useState([
-        { sender: "bot", text: "Hey Glowgetter! GlowBot here. 🌟 Need help with your routine box shipment? \\n\\nReply with a number:\\n1 - Delay 30 Days\\n2 - Skip Next Shipment\\n3 - Add-on Moisturizer" }
-      ]);
-      const [chatInput, setChatInput] = React.useState("");
-
       React.useEffect(() => {
         setCurrentPage(1);
       }, [searchQuery, strictFilter]);
@@ -2232,35 +2235,6 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
           console.error("Gift claim failed:", err);
           setClaimingGift(false);
         });
-      };
-
-      // GlowBot Live Chat Command Handler (processes real DB mutations)
-      const handleChatCommand = (cmd) => {
-        if (!cmd.trim() || !contract) return;
-        const newMsg = { sender: "user", text: cmd };
-        const updated = [...chatMessages, newMsg];
-        setChatMessages(updated);
-        setChatInput("");
-
-        setTimeout(() => {
-          let botText = "GlowBot didn't recognize that command. Type HELP to see options.";
-          const option = cmd.trim().toLowerCase();
-          
-          if (option === "1") {
-            botText = "GlowBot: Done! 📅 Delayed your upcoming box shipment by 30 days.";
-            skipBox(); // Skip/Delay 30 days
-          } else if (option === "2") {
-            botText = "GlowBot: Skipped! ⏭& Your upcoming box is skipped. We'll ship the next one.";
-            skipBox(); // Skip next box (30 days)
-          } else if (option === "3") {
-            botText = "GlowBot: Added! 🛍️ Personalized product added to your upcoming box. Thank you!";
-            addDynamicAddOn();
-          } else if (option === "help") {
-            botText = "GlowBot Options:\\n1 - Delay 30 Days\\n2 - Skip Next Box\\n3 - Add-on Curation Choice";
-          }
-          
-          setChatMessages(prev => [...prev, { sender: "bot", text: botText }]);
-        }, 600);
       };
 
       // Stay AI Scheduling actions
@@ -2582,42 +2556,6 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
               ),
               e("div", { className: "grid" },
                 e("button", { className: "btn-primary", onClick: addDynamicAddOn }, "🛍️ + Personalized Add-on")
-              )
-            ),
-
-            // GlowBot SMS Chat Assistant Widget (Fully functional DB mutator)
-            contract && e("div", { style: { marginTop: "20px" } },
-              e("div", { className: "section-title" }, "💬 GlowBot SMS Assistant"),
-              e("div", { className: "card", style: { padding: "0", display: "flex", flexDirection: "column", height: "260px", background: "white", borderRadius: "12px", border: "1px solid #cbd5e0", overflow: "hidden" } },
-                e("div", { style: { flex: 1, padding: "12px", overflowY: "auto", display: "flex", flexDirection: "column", gap: "10px", fontSize: "12px" } },
-                  chatMessages.map((msg, idx) => e("div", { 
-                    key: idx, 
-                    style: {
-                      alignSelf: msg.sender === "user" ? "flex-end" : "flex-start",
-                      background: msg.sender === "user" ? "var(--primary-color)" : "#f1f3f5",
-                      color: msg.sender === "user" ? "white" : "#2d3748",
-                      padding: "8px 12px",
-                      borderRadius: "12px",
-                      maxWidth: "80%",
-                      whiteSpace: "pre-line",
-                      lineHeight: "1.4"
-                    }
-                  }, msg.text))
-                ),
-                e("div", { style: { borderTop: "1px solid #cbd5e0", padding: "8px", display: "flex", gap: "6px" } },
-                  e("input", { 
-                    type: "text", 
-                    value: chatInput, 
-                    placeholder: "Reply 1, 2 or 3...", 
-                    onChange: (ev) => setChatInput(ev.target.value),
-                    onKeyDown: (ev) => { if (ev.key === "Enter") { handleChatCommand(chatInput); } },
-                    style: { flex: 1, padding: "8px", borderRadius: "6px", border: "1px solid #cbd5e0", fontSize: "12px", outline: "none", boxSizing: "border-box" } 
-                  }),
-                  e("button", { 
-                    onClick: () => handleChatCommand(chatInput),
-                    style: { padding: "8px 12px", backgroundColor: "var(--primary-color)", color: "white", border: "none", borderRadius: "6px", fontSize: "12px", fontWeight: "bold", cursor: "pointer" } 
-                  }, "Send")
-                )
               )
             )
           ),
