@@ -1114,12 +1114,16 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
       const shop = req.query.shop as string || "beauty-e2e-shop.myshopify.com";
       const configPath = path.resolve("./theme-settings.json");
       
+      // Query database dynamically for live product variant GIDs (no fake product ids!)
+      const dbProducts = await prisma.inventoryAnalytics.findMany();
+      const liveProductGids = dbProducts.map(p => p.productId);
+
       let themeConfig = {
         themePrimaryColor: "#b89047", // premium luxury warm gold by default
         themeSecondaryColor: "#1a365d", // premium deep navy by default
         maxAddonLimit: 1, // default limit of 1 add-on per subscriber
         minStartDateDays: 2, // default min days to start subscription is 2
-        eligibleAddonVariantIds: [
+        eligibleAddonVariantIds: liveProductGids.length > 0 ? liveProductGids : [
           "gid://shopify/ProductVariant/5001",
           "gid://shopify/ProductVariant/5002",
           "gid://shopify/ProductVariant/5003"
@@ -1131,7 +1135,7 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
             tier1: 15,
             tier2: 20,
             tier3: 25,
-            assignedVariants: [
+            assignedVariants: liveProductGids.length > 0 ? liveProductGids : [
               "gid://shopify/ProductVariant/5001",
               "gid://shopify/ProductVariant/5002",
               "gid://shopify/ProductVariant/5003"
@@ -1178,13 +1182,13 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
         }
       }
 
+      // Query database dynamically for live product variant GIDs
+      const dbProducts = await prisma.inventoryAnalytics.findMany();
+      const liveProductGids = dbProducts.map(p => p.productId);
+
       const existingLimit = allConfigs[shop]?.maxAddonLimit !== undefined ? allConfigs[shop].maxAddonLimit : 1;
       const existingMinDate = allConfigs[shop]?.minStartDateDays !== undefined ? allConfigs[shop].minStartDateDays : 2;
-      const existingAddons = allConfigs[shop]?.eligibleAddonVariantIds || [
-        "gid://shopify/ProductVariant/5001",
-        "gid://shopify/ProductVariant/5002",
-        "gid://shopify/ProductVariant/5003"
-      ];
+      const existingAddons = allConfigs[shop]?.eligibleAddonVariantIds || liveProductGids;
       const existingProfiles = allConfigs[shop]?.discountProfiles || [
         {
           id: "profile-default",
@@ -1192,11 +1196,7 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
           tier1: 15,
           tier2: 20,
           tier3: 25,
-          assignedVariants: [
-            "gid://shopify/ProductVariant/5001",
-            "gid://shopify/ProductVariant/5002",
-            "gid://shopify/ProductVariant/5003"
-          ]
+          assignedVariants: liveProductGids
         }
       ];
 
@@ -1883,8 +1883,47 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
       const [selectedGiftId, setSelectedGiftId] = React.useState("");
       const [claimingGift, setClaimingGift] = React.useState(false);
 
-      // Unified selectedVariants state (flat array representing items, supporting duplicate quantity counting)
-      const [selectedVariants, setSelectedVariants] = React.useState([]);
+      // Split visual routine selections: core subscription variants vs. one-time addon variants
+      const [coreVariants, setCoreVariants] = React.useState(() => {
+        if (contract) {
+          try {
+            const itemsList = typeof contract.items === "string" ? JSON.parse(contract.items) : contract.items;
+            const cList = [];
+            itemsList.forEach(it => {
+              if (it.isFreeGift || it.isAddOn) return; // exclude gifts and add-ons from core subscription routine
+              const qty = it.quantity || 1;
+              for (let i = 0; i < qty; i++) {
+                cList.push(it.variantId);
+              }
+            });
+            return cList;
+          } catch(e) {
+            return [];
+          }
+        }
+        return [];
+      });
+
+      const [addonVariants, setAddonVariants] = React.useState(() => {
+        if (contract) {
+          try {
+            const itemsList = typeof contract.items === "string" ? JSON.parse(contract.items) : contract.items;
+            const aList = [];
+            itemsList.forEach(it => {
+              if (it.isAddOn && !it.isFreeGift) {
+                const qty = it.quantity || 1;
+                for (let i = 0; i < qty; i++) {
+                  aList.push(it.variantId);
+                }
+              }
+            });
+            return aList;
+          } catch(e) {
+            return [];
+          }
+        }
+        return [];
+      });
 
       const [routineFrequency, setRoutineFrequency] = React.useState(() => {
         return contract ? contract.frequencyDays : 30;
@@ -1924,14 +1963,15 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
       }, [searchQuery, strictFilter]);
 
       // Calculate dynamic quantities & prices
-      const getProductQty = (vId) => selectedVariants.filter(id => id === vId).length;
+      const getProductQty = (vId) => coreVariants.filter(id => id === vId).length;
+      const getAddonQty = (vId) => addonVariants.filter(id => id === vId).length;
 
-      // Dynamic custom discount price resolver based on merchant assigned profiles
+      // Dynamic custom discount price resolver based on merchant assigned profiles (Core Subscription only!)
       const getCustomDiscountPrice = (vId, basePrice) => {
         const profileMatch = discountProfiles.find(p => p.assignedVariants.includes(vId));
         if (!profileMatch) return basePrice;
 
-        const combinedQtyInProfile = selectedVariants.reduce((sum, currentVId) => {
+        const combinedQtyInProfile = coreVariants.reduce((sum, currentVId) => {
           const isAssigned = profileMatch.assignedVariants.includes(currentVId);
           return sum + (isAssigned ? 1 : 0);
         }, 0);
@@ -1944,22 +1984,29 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
         return basePrice * ((100 - disc) / 100);
       };
 
-      const totalPrice = selectedVariants.reduce((sum, vId) => {
-        const prod = liveProducts.find(p => p.variantId === vId);
-        const basePrice = prod ? prod.price : 30.00;
-        return sum + getCustomDiscountPrice(vId, basePrice);
-      }, 0);
+      const totalPrice = React.useMemo(() => {
+        const coreSum = coreVariants.reduce((sum, vId) => {
+          const prod = liveProducts.find(p => p.variantId === vId);
+          const basePrice = prod ? prod.price : 30.00;
+          return sum + getCustomDiscountPrice(vId, basePrice);
+        }, 0);
+        const addonSum = addonVariants.reduce((sum, vId) => {
+          const prod = liveProducts.find(p => p.variantId === vId);
+          return sum + (prod ? prod.price : 30.00);
+        }, 0);
+        return coreSum + addonSum;
+      }, [coreVariants, addonVariants, liveProducts]);
 
       const handleIncrement = (vId) => {
-        setSelectedVariants([...selectedVariants, vId]);
+        setCoreVariants([...coreVariants, vId]);
       };
 
       const handleDecrement = (vId) => {
-        const idx = selectedVariants.indexOf(vId);
+        const idx = coreVariants.indexOf(vId);
         if (idx > -1) {
-          const copy = [...selectedVariants];
+          const copy = [...coreVariants];
           copy.splice(idx, 1);
-          setSelectedVariants(copy);
+          setCoreVariants(copy);
         }
       };
 
@@ -2025,7 +2072,7 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
 
       const maxSlots = 3;
       const slotsToRender = Array.from({ length: maxSlots });
-      const isFreeGiftUnlocked = selectedVariants.length >= 2;
+      const isFreeGiftUnlocked = coreVariants.length >= 2;
 
       // Check if the current visual selections differ from the saved contract items
       const hasChangesToSave = React.useMemo(() => {
@@ -2034,17 +2081,32 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
           const savedItems = typeof contract.items === "string" ? JSON.parse(contract.items) : contract.items;
           const savedFiltered = savedItems.filter(it => !it.isFreeGift);
           
-          const uniqueSelectedIds = [...new Set(selectedVariants)];
-          if (uniqueSelectedIds.length !== savedFiltered.length) return true;
+          // Re-assemble current state into flat lists
+          const currentCoreIds = [...coreVariants];
+          const currentAddonIds = [...addonVariants];
 
-          for (const it of savedFiltered) {
-            if (getProductQty(it.variantId) !== (it.quantity || 1)) return true;
+          const savedCore = savedFiltered.filter(it => !it.isAddOn);
+          const savedAddons = savedFiltered.filter(it => it.isAddOn);
+
+          // Compare core
+          const uniqueCoreIds = [...new Set(currentCoreIds)];
+          if (uniqueCoreIds.length !== savedCore.length) return true;
+          for (const it of savedCore) {
+            if (coreVariants.filter(id => id === it.variantId).length !== (it.quantity || 1)) return true;
           }
+
+          // Compare addons
+          const uniqueAddonIds = [...new Set(currentAddonIds)];
+          if (uniqueAddonIds.length !== savedAddons.length) return true;
+          for (const it of savedAddons) {
+            if (addonVariants.filter(id => id === it.variantId).length !== (it.quantity || 1)) return true;
+          }
+
           return false;
         } catch(e) {
           return false;
         }
-      }, [selectedVariants, contract]);
+      }, [coreVariants, addonVariants, contract]);
 
       // Save/Submit Preference Profile Quiz responses directly in the portal!
       const saveSkinProfile = () => {
@@ -2092,17 +2154,29 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
       // Create storefront routine activation flow (empty-state builder checkout)
       const activateRoutine = () => {
         setActivating(true);
-        const uniqueSelectedIds = [...new Set(selectedVariants)];
+        const uniqueCoreIds = [...new Set(coreVariants)];
 
-        const itemsToCreate = uniqueSelectedIds.map(vId => {
+        const itemsToCreate = uniqueCoreIds.map(vId => {
           const p = liveProducts.find(prod => prod.variantId === vId);
           const basePrice = p ? p.price : 30.00;
           return {
             variantId: p.variantId,
             productName: p.productName,
             price: getCustomDiscountPrice(vId, basePrice), // Save correctly discounted volume price!
-            quantity: getProductQty(vId)
+            quantity: coreVariants.filter(id => id === vId).length
           };
+        });
+
+        const uniqueAddonIds = [...new Set(addonVariants)];
+        uniqueAddonIds.forEach(vId => {
+          const p = liveProducts.find(prod => prod.variantId === vId);
+          itemsToCreate.push({
+            variantId: vId,
+            productName: p ? p.productName : "Add-on Product",
+            price: p ? p.price : 30.00,
+            isAddOn: true,
+            quantity: addonVariants.filter(id => id === vId).length
+          });
         });
 
         if (isFreeGiftUnlocked) {
@@ -2150,18 +2224,39 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
       // Save changes to active routine items (updates contract in DB)
       const saveActiveRoutineEdits = () => {
         setActivating(true);
-        const uniqueSelectedIds = [...new Set(selectedVariants)];
+        const uniqueCoreIds = [...new Set(coreVariants)];
 
-        const itemsToSave = uniqueSelectedIds.map(vId => {
+        const itemsToSave = uniqueCoreIds.map(vId => {
           const p = liveProducts.find(prod => prod.variantId === vId);
           const basePrice = p ? p.price : 30.00;
           return {
             variantId: p.variantId,
             productName: p ? p.productName : vId,
             price: getCustomDiscountPrice(vId, basePrice), // Save correctly discounted volume price!
-            quantity: getProductQty(vId)
+            quantity: coreVariants.filter(id => id === vId).length
           };
         });
+
+        const uniqueAddonIds = [...new Set(addonVariants)];
+        uniqueAddonIds.forEach(vId => {
+          const p = liveProducts.find(prod => prod.variantId === vId);
+          itemsToSave.push({
+            variantId: vId,
+            productName: p ? p.productName : "Add-on Product",
+            price: p ? p.price : 30.00,
+            isAddOn: true,
+            quantity: addonVariants.filter(id => id === vId).length
+          });
+        });
+
+        // Preserve already claimed free milestone gifts in their box
+        if (contract) {
+          try {
+            const savedItems = typeof contract.items === "string" ? JSON.parse(contract.items) : contract.items;
+            const activeGifts = savedItems.filter(it => it.isFreeGift);
+            itemsToSave.push(...activeGifts);
+          } catch (e) {}
+        }
 
         if (isFreeGiftUnlocked) {
           itemsToSave.push({
@@ -2273,7 +2368,7 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
         const candidates = liveProducts.filter(prod => {
           if (!eligibleAddons.includes(prod.variantId)) return false;
           if (prod.stockLevel !== undefined && prod.stockLevel <= 0) return false;
-          if (selectedVariants.includes(prod.variantId)) return false;
+          if (coreVariants.includes(prod.variantId) || addonVariants.includes(prod.variantId)) return false;
           for (const allergen of currentAllergens) {
             if (prod.productName.toLowerCase().includes(allergen)) return false;
           }
@@ -2298,11 +2393,9 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
           return;
         }
 
-        triggerAction("/api/storefront/portal/add-on", {
-          variantId: chosen.variantId,
-          productName: chosen.productName,
-          price: chosen.price
-        });
+        setAddonVariants([...addonVariants, chosen.variantId]);
+        setNotification("🛍️ Curated Add-On: " + chosen.productName + " added for your next shipment!");
+        setTimeout(() => setNotification(null), 3000);
       };
 
       return e("div", null,
@@ -2564,16 +2657,16 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
           e("div", null,
             e("div", { className: "section-title" }, contract ? "📦 Customize Upcoming Box" : "🛍️ Build Your Dynamic Box"),
             
-            // Kaching-Style Volume Breaks Upsell Widget (Competitor Parity)
+            // Glow-Style Volume Breaks Upsell Widget
             React.useMemo(() => {
-              const currentQty = selectedVariants.length;
+              const currentQty = coreVariants.length;
               const t1Active = currentQty === 1 || currentQty === 2;
               const t2Active = currentQty === 3;
               const t3Active = currentQty >= 4;
 
               // Dynamically resolve active discount profile matching user selections
               const currentActiveProfile = (() => {
-                for (const vId of selectedVariants) {
+                for (const vId of coreVariants) {
                   const matched = discountProfiles.find(p => p.assignedVariants && p.assignedVariants.includes(vId));
                   if (matched) return matched;
                 }
@@ -2584,6 +2677,18 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
               const t2Val = currentActiveProfile.tier2 !== undefined ? currentActiveProfile.tier2 : 20;
               const t3Val = currentActiveProfile.tier3 !== undefined ? currentActiveProfile.tier3 : 25;
 
+              // Check if at least 1 core item belongs to an active, assigned discount profile!
+              const hasEligibleCoreItem = coreVariants.some(vId => {
+                const profileMatch = discountProfiles.find(p => p.assignedVariants && p.assignedVariants.includes(vId));
+                if (!profileMatch) return false;
+                const t1 = profileMatch.tier1 || 0;
+                const t2 = profileMatch.tier2 || 0;
+                const t3 = profileMatch.tier3 || 0;
+                return t1 > 0 || t2 > 0 || t3 > 0;
+              });
+
+              if (!hasEligibleCoreItem) return null; // HIDES the widget entirely if no eligible products exist in their core box!
+
               const activeStyle = {
                 border: "1.5px solid var(--primary-color)",
                 background: "var(--primary-light)",
@@ -2592,7 +2697,7 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
 
               return e("div", { style: { marginBottom: "20px" } },
                 e("div", { style: { fontSize: "11px", fontWeight: "700", color: "#2c3e50", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "8px", display: "flex", justifyContent: "space-between", alignItems: "center" } }, 
-                  e("span", null, "🔥 Kaching Volume Breaks"),
+                  e("span", null, "🔥 Glow Volume Breaks"),
                   currentQty > 0 && e("span", { style: { color: "var(--primary-color)", fontSize: "10px", fontWeight: "bold" } }, currentQty + " " + (currentQty === 1 ? "Item" : "Items") + " Selected")
                 ),
                 e("div", { style: { display: "flex", gap: "8px" } },
@@ -2651,12 +2756,12 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
               );
             }, [selectedVariants, discountProfiles]),
 
-            // Visual Slots showing chosen items
+            // Visual Slots showing chosen items (Core Recurring subscription Box!)
             e("div", { style: { marginBottom: "20px", textAlign: "center", background: "#f8fafc", padding: "12px", borderRadius: "12px", border: "1px solid #e2e8f0" } },
-              e("div", { style: { fontSize: "11px", fontWeight: "700", color: "#718096", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "8px" } }, "Your Skincare Routine Box"),
+              e("div", { style: { fontSize: "11px", fontWeight: "700", color: "#718096", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "8px" } }, "📦 Your Recurring Subscription Routine"),
               e("div", { className: "slot-container" },
                 slotsToRender.map((_, idx) => {
-                  const vId = selectedVariants[idx];
+                  const vId = coreVariants[idx];
                   if (vId) {
                     const prod = liveProducts.find(p => p.variantId === vId);
                     return e("div", { key: idx, className: "slot slot-filled" },
@@ -2667,6 +2772,41 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
                     return e("div", { key: idx, className: "slot slot-empty" });
                   }
                 })
+              )
+            ),
+
+            // One-Time Add-Ons (Next Shipment Only - Strictly Separated!)
+            addonVariants.length > 0 && e("div", { style: { marginBottom: "20px", background: "#fffaf0", padding: "16px", borderRadius: "4px", border: "1px dashed #dd6b20" } },
+              e("div", { style: { fontSize: "11px", fontWeight: "700", color: "#c05621", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "8px" } }, "🛍️ One-Time Add-Ons (Next Shipment Only)"),
+              e("p", { style: { fontSize: "11px", color: "#dd6b20", margin: "0 0 10px 0", fontStyle: "italic" } }, "These custom products ship once in your upcoming box and do not recur monthly."),
+              e("div", { style: { display: "flex", flexDirection: "column", gap: "8px" } },
+                (() => {
+                  const uniqueAddonIds = [...new Set(addonVariants)];
+                  return uniqueAddonIds.map(vId => {
+                    const prod = liveProducts.find(p => p.variantId === vId);
+                    const qty = addonVariants.filter(id => id === vId).length;
+                    const handleRemoveAddonState = () => {
+                      setAddonVariants(addonVariants.filter(id => id !== vId));
+                    };
+
+                    return e("div", { key: vId, style: { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 12px", background: "#fff", borderRadius: "4px", border: "1px solid #eae6df" } },
+                      e("div", { style: { display: "flex", alignItems: "center", gap: "8px" } },
+                        e("span", { style: { fontSize: "18px" } }, "🧴"),
+                        e("div", null,
+                          e("div", { style: { fontSize: "12px", fontWeight: "bold", color: "#2d3748" } }, (prod ? prod.productName : "One-Time Product") + " (x" + qty + ")"),
+                          e("span", { className: "free-gift-badge", style: { fontSize: "8px", padding: "1px 4px", background: "var(--primary-color)" } }, "One-Time")
+                        )
+                      ),
+                      e("div", { style: { display: "flex", alignItems: "center", gap: "10px" } },
+                        e("span", { style: { fontSize: "12px", fontWeight: "bold", color: "var(--primary-color)" } }, "$" + (prod ? (prod.price * qty).toFixed(2) : "25.00")),
+                        e("button", { 
+                          onClick: handleRemoveAddonState,
+                          style: { background: "none", border: "none", color: "#e53e3e", fontWeight: "bold", cursor: "pointer", fontSize: "14px", padding: "0 4px" }
+                        }, "✕")
+                      )
+                    );
+                  });
+                })()
               )
             ),
 
@@ -2717,16 +2857,14 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
               e("div", { style: { fontSize: "11px", fontWeight: "700", color: "#c05621", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "8px" } }, "🎁 Active Box Add-ons & Free Rewards"),
               
               (() => {
-                // Read claimed free gifts and active manual add-ons from contract if available
+                // Read claimed free gifts from contract if available
                 const contractItems = contract ? (typeof contract.items === "string" ? JSON.parse(contract.items) : contract.items) : [];
                 const activeGifts = contractItems.filter(it => it.isFreeGift);
                 
                 const hasUnlockedBuilderGift = !contract && isFreeGiftUnlocked;
                 const hasClaimedActiveGift = contract && activeGifts.length > 0;
                 
-                const totalAddonCount = selectedVariants.slice(maxSlots).length;
-                
-                if (totalAddonCount === 0 && !hasUnlockedBuilderGift && !hasClaimedActiveGift) {
+                if (!hasUnlockedBuilderGift && !hasClaimedActiveGift) {
                   return e("p", { style: { fontSize: "12px", color: "#dd6b20", margin: 0, fontStyle: "italic" } }, "Add items above to unlock safe deluxe samples and customized add-ons!");
                 }
 
@@ -2787,33 +2925,6 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
                         e("span", { style: { fontSize: "12px", fontWeight: "bold", color: "#008060" } }, "FREE"),
                         e("button", { 
                           onClick: handleRemoveMilestoneGift,
-                          style: { background: "none", border: "none", color: "#e53e3e", fontWeight: "bold", cursor: "pointer", fontSize: "14px", padding: "0 4px" }
-                        }, "✕")
-                      )
-                    );
-                  }),
-                  
-                  // 3. Manual Add-ons
-                  selectedVariants.slice(maxSlots).map((vId, subIdx) => {
-                    const prod = liveProducts.find(p => p.variantId === vId);
-                    const actualIdx = maxSlots + subIdx;
-                    const handleRemoveAddon = () => {
-                      const copy = [...selectedVariants];
-                      copy.splice(actualIdx, 1);
-                      setSelectedVariants(copy);
-                    };
-                    return e("div", { key: subIdx, style: { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 12px", background: "#fff", borderRadius: "8px", border: "1px solid #e2e8f0" } },
-                      e("div", { style: { display: "flex", alignItems: "center", gap: "8px" } },
-                        e("span", { style: { fontSize: "18px" } }, "🧴"),
-                        e("div", null,
-                          e("div", { style: { fontSize: "12px", fontWeight: "bold", color: "#2d3748" } }, prod ? prod.productName : "Add-on Product"),
-                          e("span", { className: "free-gift-badge", style: { fontSize: "8px", padding: "1px 4px", background: "var(--primary-color)" } }, "Add-On")
-                        )
-                      ),
-                      e("div", { style: { display: "flex", alignItems: "center", gap: "10px" } },
-                        e("span", { style: { fontSize: "12px", fontWeight: "bold", color: "var(--primary-color)" } }, "$" + (prod ? prod.price.toFixed(2) : "30.00")),
-                        e("button", { 
-                          onClick: handleRemoveAddon,
                           style: { background: "none", border: "none", color: "#e53e3e", fontWeight: "bold", cursor: "pointer", fontSize: "14px", padding: "0 4px" }
                         }, "✕")
                       )
@@ -2931,63 +3042,80 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
               )
             ),
 
-            // Dynamic Sticky Footer (Supports Kaching-style Tiered Volume Discounts)
+            // Dynamic Sticky Footer (Supports Glow Tiered Volume Discounts)
             e("div", { className: "sticky-footer" },
               React.useMemo(() => {
-                const subtotalPrice = selectedVariants.reduce((sum, vId) => {
+                const subtotalPrice = coreVariants.reduce((sum, vId) => {
                   const prod = liveProducts.find(p => p.variantId === vId);
-                  return sum + (prod ? prod.price : 0);
+                  return sum + (prod ? prod.price : 30.00);
+                }, 0) + addonVariants.reduce((sum, vId) => {
+                  const prod = liveProducts.find(p => p.variantId === vId);
+                  return sum + (prod ? prod.price : 30.00);
                 }, 0);
 
-                const currentQty = selectedVariants.length;
-                let discPercent = 0;
-                let discountedTotal = 0;
-                let tierMsg = "Add skincare products above to unlock VIP savings!";
+                const coreQty = coreVariants.length;
+                const totalQty = coreVariants.length + addonVariants.length;
 
-                if (currentQty === 1) {
-                  discPercent = 15;
-                  discountedTotal = subtotalPrice * 0.85;
-                  tierMsg = "✨ Add 2 more items to unlock 20% Off + Free Gift!";
-                } else if (currentQty === 2) {
-                  discPercent = 15;
-                  discountedTotal = subtotalPrice * 0.85;
-                  tierMsg = "🎉 15% Off unlocked! Add 1 more to unlock 20% Off + Free Gift!";
-                } else if (currentQty === 3) {
-                  discPercent = 20;
-                  discountedTotal = subtotalPrice * 0.80;
-                  tierMsg = "🔥 20% Off + Free Gift unlocked! Add 1 more to unlock 25% VIP Off!";
-                } else if (currentQty >= 4) {
-                  discPercent = 25;
-                  discountedTotal = subtotalPrice * 0.75;
-                  tierMsg = "👑 25% VIP Off + Free Gift fully unlocked! Maximum savings applied.";
+                // Dynamically resolve active discount profile matching user selections
+                const currentActiveProfile = (() => {
+                  for (const vId of coreVariants) {
+                    const matched = discountProfiles.find(p => p.assignedVariants && p.assignedVariants.includes(vId));
+                    if (matched) return matched;
+                  }
+                  return discountProfiles[0] || { tier1: 15, tier2: 20, tier3: 25 };
+                })();
+
+                const t1 = currentActiveProfile.tier1 || 0;
+                const t2 = currentActiveProfile.tier2 || 0;
+                const t3 = currentActiveProfile.tier3 || 0;
+
+                const discPercent = coreQty >= 4 ? t3 : (coreQty === 3 ? t2 : t1);
+                
+                // Calculate actual discounted total using our dynamic helper!
+                const discountedTotal = coreVariants.reduce((sum, vId) => {
+                  const prod = liveProducts.find(p => p.variantId === vId);
+                  const basePrice = prod ? prod.price : 30.00;
+                  return sum + getCustomDiscountPrice(vId, basePrice);
+                }, 0) + addonVariants.reduce((sum, vId) => {
+                  const prod = liveProducts.find(p => p.variantId === vId);
+                  return sum + (prod ? prod.price : 30.00);
+                }, 0);
+
+                let tierMsg = "Add skincare products above to unlock VIP savings!";
+                if (coreQty >= 1 && coreQty <= 2) {
+                  tierMsg = "🎉 " + t1 + "% Off unlocked! Add 1 more to unlock " + t2 + "% Off + Free Gift!";
+                } else if (coreQty === 3) {
+                  tierMsg = "🔥 " + t2 + "% Off + Free Gift unlocked! Add 1 more to unlock " + t3 + "% VIP Off!";
+                } else if (coreQty >= 4) {
+                  tierMsg = "👑 " + t3 + "% VIP Off + Free Gift fully unlocked! Maximum savings applied.";
                 }
 
                 return e("div", null,
                   e("div", { style: { fontSize: "11px", fontWeight: "700", color: "#4a5568", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "8px", textAlign: "center", fontStyle: "italic" } }, tierMsg),
                   e("div", { className: "summary-row", style: { borderTop: "1px solid #e2e8f0", paddingTop: "8px" } },
                     e("span", { className: "summary-text" }, 
-                      currentQty === 0 ? "Choose your items" : 
-                      (currentQty === 1 ? "1 Item Selected" : currentQty + " Items Selected")
+                      totalQty === 0 ? "Choose your items" : 
+                      (totalQty === 1 ? "1 Item Selected" : totalQty + " Items Selected")
                     ),
                     e("div", { style: { textAlign: "right" } },
                       subtotalPrice > discountedTotal && e("span", { style: { fontSize: "13px", textDecoration: "line-through", color: "#a0aec0", marginRight: "8px", fontWeight: "600" } }, "$" + subtotalPrice.toFixed(2)),
                       e("span", { className: "summary-total" }, "$" + discountedTotal.toFixed(2)),
-                      discPercent > 0 && e("div", { style: { fontSize: "10px", fontWeight: "bold", color: "#008060" } }, discPercent + "% Volume Savings Applied")
+                      discPercent > 0 && e("div", { style: { fontSize: "10px", fontWeight: "bold", color: "var(--primary-color)" } }, discPercent + "% Volume Savings Applied")
                     )
                   )
                 );
-              }, [selectedVariants, liveProducts]),
+              }, [coreVariants, addonVariants, liveProducts, discountProfiles]),
               
               contract ? (
                 e("button", { 
                   className: "btn-primary", 
-                  disabled: selectedVariants.length === 0 || activating || !hasChangesToSave, 
+                  disabled: coreVariants.length === 0 || activating || !hasChangesToSave, 
                   onClick: saveActiveRoutineEdits
                 }, activating ? "⏳ Saving..." : (hasChangesToSave ? "💾 Save Changes to Upcoming Box" : "✨ Box Up To Date"))
               ) : (
                 e("button", { 
                   className: "btn-primary", 
-                  disabled: selectedVariants.length === 0 || activating, 
+                  disabled: coreVariants.length === 0 || activating, 
                   onClick: activateRoutine
                 }, activating ? "⏳ Activating..." : "🚀 Activate Routine & Unlock Portal")
               )
