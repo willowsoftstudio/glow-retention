@@ -2633,6 +2633,19 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
               const t2Active = currentQty === 3;
               const t3Active = currentQty >= 4;
 
+              // Dynamically resolve active discount profile matching user selections
+              const currentActiveProfile = (() => {
+                for (const vId of selectedVariants) {
+                  const matched = discountProfiles.find(p => p.assignedVariants && p.assignedVariants.includes(vId));
+                  if (matched) return matched;
+                }
+                return discountProfiles[0] || { tier1: 15, tier2: 20, tier3: 25 };
+              })();
+
+              const t1Val = currentActiveProfile.tier1 !== undefined ? currentActiveProfile.tier1 : 15;
+              const t2Val = currentActiveProfile.tier2 !== undefined ? currentActiveProfile.tier2 : 20;
+              const t3Val = currentActiveProfile.tier3 !== undefined ? currentActiveProfile.tier3 : 25;
+
               const activeStyle = {
                 border: "1.5px solid var(--primary-color)",
                 background: "var(--primary-light)",
@@ -2659,7 +2672,7 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
                     }
                   },
                     e("div", { style: { fontSize: "10px", fontWeight: "bold", color: t1Active ? "var(--primary-color)" : "#718096" } }, "1-2 Items"),
-                    e("div", { style: { fontSize: "12px", fontWeight: "800", color: t1Active ? "var(--primary-color)" : "#2d3748", margin: "2px 0" } }, tier1Discount + "% OFF"),
+                    e("div", { style: { fontSize: "12px", fontWeight: "800", color: t1Active ? "var(--primary-color)" : "#2d3748", margin: "2px 0" } }, t1Val + "% OFF"),
                     e("span", { style: { fontSize: "8px", background: t1Active ? "var(--primary-color)" : "#718096", color: "white", padding: "1px 4px", borderRadius: "2px" } }, t1Active ? "✓ Active" : "Bronze")
                   ),
                   // Tier 2 (3 items)
@@ -2676,7 +2689,7 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
                     }
                   },
                     e("div", { style: { fontSize: "10px", fontWeight: "bold", color: t2Active ? "var(--primary-color)" : "#718096" } }, "3 Items"),
-                    e("div", { style: { fontSize: "12px", fontWeight: "800", color: t2Active ? "var(--primary-color)" : "#2d3748", margin: "2px 0" } }, tier2Discount + "% OFF"),
+                    e("div", { style: { fontSize: "12px", fontWeight: "800", color: t2Active ? "var(--primary-color)" : "#2d3748", margin: "2px 0" } }, t2Val + "% OFF"),
                     e("span", { style: { fontSize: "8px", background: t2Active ? "var(--primary-color)" : "#718096", color: "white", padding: "1px 4px", borderRadius: "2px" } }, t2Active ? "✓ Active" : "Silver")
                   ),
                   // Tier 3 (4+ items)
@@ -2693,12 +2706,12 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
                     }
                   },
                     e("div", { style: { fontSize: "10px", fontWeight: "bold", color: t3Active ? "var(--primary-color)" : "#718096" } }, "4+ Items"),
-                    e("div", { style: { fontSize: "12px", fontWeight: "800", color: t3Active ? "var(--primary-color)" : "#2d3748", margin: "2px 0" } }, tier3Discount + "% OFF"),
+                    e("div", { style: { fontSize: "12px", fontWeight: "800", color: t3Active ? "var(--primary-color)" : "#2d3748", margin: "2px 0" } }, t3Val + "% OFF"),
                     e("span", { style: { fontSize: "8px", background: t3Active ? "var(--primary-color)" : "#718096", color: "white", padding: "1px 4px", borderRadius: "2px" } }, t3Active ? "✓ Active" : "Gold / Max")
                   )
                 )
               );
-            }, [selectedVariants]),
+            }, [selectedVariants, discountProfiles]),
 
             // Visual Slots showing chosen items
             e("div", { style: { marginBottom: "20px", textAlign: "center", background: "#f8fafc", padding: "12px", borderRadius: "12px", border: "1px solid #e2e8f0" } },
