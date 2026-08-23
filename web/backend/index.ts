@@ -2671,6 +2671,282 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
         setTimeout(() => setNotification(null), 3000);
       };
 
+      // --- Hoisted Top-Level React Hooks (synchronous order reconciliation!) ---
+      
+      const volumeBreaksWidget = React.useMemo(() => {
+        const currentQty = coreVariants.length;
+        const t1Active = currentQty === 1 || currentQty === 2;
+        const t2Active = currentQty === 3;
+        const t3Active = currentQty >= 4;
+
+        const currentActiveProfile = (() => {
+          for (const vId of coreVariants) {
+            const matched = discountProfiles.find(p => p.assignedVariants && p.assignedVariants.includes(vId));
+            if (matched) return matched;
+          }
+          return discountProfiles[0] || { tier1: 15, tier2: 20, tier3: 25 };
+        })();
+
+        const t1Val = currentActiveProfile.tier1 !== undefined ? currentActiveProfile.tier1 : 15;
+        const t2Val = currentActiveProfile.tier2 !== undefined ? currentActiveProfile.tier2 : 20;
+        const t3Val = currentActiveProfile.tier3 !== undefined ? currentActiveProfile.tier3 : 25;
+
+        const hasEligibleCoreItem = coreVariants.some(vId => {
+          const profileMatch = discountProfiles.find(p => p.assignedVariants && p.assignedVariants.includes(vId));
+          if (!profileMatch) return false;
+          const t1 = profileMatch.tier1 || 0;
+          const t2 = profileMatch.tier2 || 0;
+          const t3 = profileMatch.tier3 || 0;
+          return t1 > 0 || t2 > 0 || t3 > 0;
+        });
+
+        if (!hasEligibleCoreItem) return null;
+
+        const activeStyle = {
+          border: "1.5px solid var(--primary-color)",
+          background: "var(--primary-light)",
+          boxShadow: "none"
+        };
+
+        return e("div", { style: { marginBottom: "20px" } },
+          e("div", { style: { fontSize: "11px", fontWeight: "700", color: "#2c3e50", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "8px", display: "flex", justifyContent: "space-between", alignItems: "center" } }, 
+            e("span", null, "🔥 Glow Volume Breaks"),
+            currentQty > 0 && e("span", { style: { color: "var(--primary-color)", fontSize: "10px", fontWeight: "bold" } }, currentQty + " " + (currentQty === 1 ? "Item" : "Items") + " Selected")
+          ),
+          e("div", { style: { display: "flex", gap: "8px" } },
+            e("div", { 
+              style: { 
+                flex: 1, 
+                padding: "8px", 
+                borderRadius: "4px", 
+                border: "1px solid #eae6df", 
+                background: "white", 
+                textAlign: "center",
+                transition: "all 0.2s",
+                ...(t1Active ? activeStyle : {})
+              }
+            },
+              e("div", { style: { fontSize: "10px", fontWeight: "bold", color: t1Active ? "var(--primary-color)" : "#718096" } }, "1-2 Items"),
+              e("div", { style: { fontSize: "12px", fontWeight: "800", color: t1Active ? "var(--primary-color)" : "#2d3748", margin: "2px 0" } }, t1Val + "% OFF"),
+              e("span", { style: { fontSize: "8px", background: t1Active ? "var(--primary-color)" : "#718096", color: "white", padding: "1px 4px", borderRadius: "2px" } }, t1Active ? "✓ Active" : "Bronze")
+            ),
+            e("div", { 
+              style: { 
+                flex: 1, 
+                padding: "8px", 
+                borderRadius: "4px", 
+                border: "1px solid #eae6df", 
+                background: "white", 
+                textAlign: "center",
+                transition: "all 0.2s",
+                ...(t2Active ? activeStyle : {})
+              }
+            },
+              e("div", { style: { fontSize: "10px", fontWeight: "bold", color: t2Active ? "var(--primary-color)" : "#718096" } }, "3 Items"),
+              e("div", { style: { fontSize: "12px", fontWeight: "800", color: t2Active ? "var(--primary-color)" : "#2d3748", margin: "2px 0" } }, t2Val + "% OFF"),
+              e("span", { style: { fontSize: "8px", background: t2Active ? "var(--primary-color)" : "#718096", color: "white", padding: "1px 4px", borderRadius: "2px" } }, t2Active ? "✓ Active" : "Silver")
+            ),
+            e("div", { 
+              style: { 
+                flex: 1, 
+                padding: "8px", 
+                borderRadius: "4px", 
+                border: "1px solid #eae6df", 
+                background: "white", 
+                textAlign: "center",
+                transition: "all 0.2s",
+                ...(t3Active ? activeStyle : {})
+              }
+            },
+              e("div", { style: { fontSize: "10px", fontWeight: "bold", color: t3Active ? "var(--primary-color)" : "#718096" } }, "4+ Items"),
+              e("div", { style: { fontSize: "12px", fontWeight: "800", color: t3Active ? "var(--primary-color)" : "#2d3748", margin: "2px 0" } }, t3Val + "% OFF"),
+              e("span", { style: { fontSize: "8px", background: t3Active ? "var(--primary-color)" : "#718096", color: "white", padding: "1px 4px", borderRadius: "2px" } }, t3Active ? "✓ Active" : "Gold / Max")
+            )
+          )
+        );
+      }, [coreVariants, discountProfiles]);
+
+      const milestoneSelectorWidget = React.useMemo(() => {
+        if (!contract || contract.ordersCompleted < milestoneCount) return null;
+        
+        try {
+          const currentItems = typeof contract.items === "string" ? JSON.parse(contract.items) : contract.items;
+          const hasAlreadyClaimed = currentItems.some(it => it.isFreeGift);
+          if (hasAlreadyClaimed) return null;
+        } catch(e) {
+          return null;
+        }
+
+        return e("div", { className: "free-gift-card", style: { background: "linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%)", border: "2px dashed #008060", padding: "20px", borderRadius: "4px", marginBottom: "20px" } },
+          e("div", { style: { fontSize: "40px" } }, "🎁"),
+          e("div", { style: { flex: 1 } },
+            e("span", { className: "free-gift-badge", style: { background: "#008060", color: "white", fontSize: "9px", padding: "2px 6px", borderRadius: "10px", fontWeight: "bold" } }, "👑 Milestone Unlocked"),
+            e("div", { style: { fontSize: "14px", fontWeight: "bold", color: "#14532d", marginTop: "4px" } }, "Congratulations! You completed " + contract.ordersCompleted + " orders."),
+            e("p", { style: { fontSize: "12px", color: "#166534", margin: "4px 0 12px 0" } }, "Select exactly 1 free reward from our milestone catalog to include in your next upcoming box shipment:"),
+            
+            e("div", { style: { display: "flex", gap: "10px", alignItems: "center", marginBottom: "12px", flexWrap: "wrap" } },
+              e("select", {
+                value: selectedGiftId,
+                onChange: (ev) => setSelectedGiftId(ev.target.value),
+                style: { flex: 1, padding: "10px", borderRadius: "2px", border: "1px solid #008060", fontSize: "13px", outline: "none", background: "white", cursor: "pointer" }
+              },
+                e("option", { value: "" }, "Choose your deluxe gift..."),
+                eligibleGifts.map(gId => {
+                  let name = "Deluxe Product Gift";
+                  if (gId === "gid://shopify/ProductVariant/5001") name = "Vitamin C Serum (Free Gift)";
+                  else if (gId === "gid://shopify/ProductVariant/5002") name = "Charcoal Face Mask (Free Gift)";
+                  else if (gId === "gid://shopify/ProductVariant/5003") name = "Moisturizer (Free Gift)";
+                  return e("option", { key: gId, value: gId }, name);
+                })
+              ),
+              e("button", { 
+                className: "button-primary",
+                disabled: !selectedGiftId || claimingGift,
+                onClick: claimMilestoneGift,
+                style: { padding: "10px 20px", background: "#008060", color: "white", border: "none", borderRadius: "2px", fontSize: "12px", fontWeight: "bold", cursor: "pointer" }
+              }, claimingGift ? "⏳ Claiming..." : "🎁 Add Gift to Box")
+            )
+          )
+        );
+      }, [contract, selectedGiftId, claimingGift, eligibleGifts, milestoneCount]);
+
+      const unlockedRewardsWidget = React.useMemo(() => {
+        const contractItems = contract ? (typeof contract.items === "string" ? JSON.parse(contract.items) : contract.items) : [];
+        const activeGifts = contractItems.filter(it => it.isFreeGift);
+        
+        const hasUnlockedBuilderGift = !contract && isFreeGiftUnlocked;
+        const hasClaimedActiveGift = contract && activeGifts.length > 0;
+        
+        if (!hasUnlockedBuilderGift && !hasClaimedActiveGift) {
+          return null;
+        }
+
+        return e("div", { style: { marginBottom: "20px", background: "#fcfaf6", padding: "14px", borderRadius: "4px", border: "1px dashed var(--primary-color)" } },
+          e("div", { style: { fontSize: "11px", fontWeight: "700", color: "var(--primary-color)", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "8px" } }, "🎁 Unlocked Routine Perks & Gifts"),
+          e("div", { style: { display: "flex", flexDirection: "column", gap: "8px" } },
+            hasUnlockedBuilderGift && e("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 12px", background: "#fff", borderRadius: "4px", border: "1px solid #feebc8" } },
+              e("div", { style: { display: "flex", alignItems: "center", gap: "8px" } },
+                e("span", { style: { fontSize: "18px" } }, "🎁"),
+                e("div", null,
+                  e("div", { style: { fontSize: "12px", fontWeight: "bold", color: "#7b341e" } }, "Complimentary Hydrating Aloe Deluxe Sample"),
+                  e("span", { className: "free-gift-badge", style: { fontSize: "8px", padding: "1px 4px", background: "#008060" } }, "UNLOCKED GIFT")
+                )
+              ),
+              e("span", { style: { fontSize: "12px", fontWeight: "bold", color: "#008060" } }, "FREE")
+            ),
+            
+            hasClaimedActiveGift && activeGifts.map((it, idx) => {
+              const handleRemoveMilestoneGift = () => {
+                setActivating(true);
+                const updatedItems = contractItems.filter(item => item.variantId !== it.variantId);
+                fetch("/api/storefront/portal/update-items", {
+                  method: "POST",
+                  headers: { 
+                    "Content-Type": "application/json",
+                    "x-shop-domain": "${shop}",
+                    "x-test-session-id": "beauty-portal-session"
+                  },
+                  body: JSON.stringify({ 
+                    contractId: contract.id, 
+                    items: updatedItems
+                  })
+                })
+                .then(res => res.json())
+                .then(data => {
+                  if (data.success) {
+                    setContract(data.contract);
+                    setNotification("🔄 Milestone gift removed! You can now select a different reward.");
+                    setTimeout(() => setNotification(null), 3000);
+                  }
+                  setActivating(false);
+                })
+                .catch(err => {
+                  console.error("Failed to remove milestone gift:", err);
+                  setActivating(false);
+                });
+              };
+
+              return e("div", { key: "gift-" + idx, style: { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 12px", background: "#fff", borderRadius: "4px", border: "1px solid #b8dfc4" } },
+                e("div", { style: { display: "flex", alignItems: "center", gap: "8px" } },
+                  e("span", { style: { fontSize: "18px" } }, "🎁"),
+                  e("div", null,
+                    e("div", { style: { fontSize: "12px", fontWeight: "bold", color: "#14532d" } }, it.productName + " (VIP Reward)"),
+                    e("span", { className: "free-gift-badge", style: { fontSize: "8px", padding: "1px 4px", background: "#008060" } }, "MILESTONE CLAIMED")
+                  )
+                ),
+                e("div", { style: { display: "flex", alignItems: "center", gap: "10px" } },
+                  e("span", { style: { fontSize: "12px", fontWeight: "bold", color: "#008060" } }, "FREE"),
+                  e("button", { 
+                    onClick: handleRemoveMilestoneGift,
+                    style: { background: "none", border: "none", color: "#e53e3e", fontWeight: "bold", cursor: "pointer", fontSize: "14px", padding: "0 4px" }
+                  }, "✕")
+                )
+              );
+            })
+          )
+        );
+      }, [contract, isFreeGiftUnlocked]);
+
+      const dynamicStickyFooter = React.useMemo(() => {
+        const subtotalPrice = coreVariants.reduce((sum, vId) => {
+          const prod = liveProducts.find(p => p.variantId === vId);
+          return sum + (prod ? prod.price : 30.00);
+        }, 0) + addonVariants.reduce((sum, vId) => {
+          const prod = liveProducts.find(p => p.variantId === vId);
+          return sum + (prod ? prod.price : 30.00);
+        }, 0);
+
+        const coreQty = coreVariants.length;
+        const totalQty = coreVariants.length + addonVariants.length;
+
+        const currentActiveProfile = (() => {
+          for (const vId of coreVariants) {
+            const matched = discountProfiles.find(p => p.assignedVariants && p.assignedVariants.includes(vId));
+            if (matched) return matched;
+          }
+          return discountProfiles[0] || { tier1: 15, tier2: 20, tier3: 25 };
+        })();
+
+        const t1 = currentActiveProfile.tier1 || 0;
+        const t2 = currentActiveProfile.tier2 || 0;
+        const t3 = currentActiveProfile.tier3 || 0;
+
+        const discPercent = coreQty >= 4 ? t3 : (coreQty === 3 ? t2 : t1);
+        
+        const discountedTotal = coreVariants.reduce((sum, vId) => {
+          const prod = liveProducts.find(p => p.variantId === vId);
+          const basePrice = prod ? prod.price : 30.00;
+          return sum + getCustomDiscountPrice(vId, basePrice);
+        }, 0) + addonVariants.reduce((sum, vId) => {
+          const prod = liveProducts.find(p => p.variantId === vId);
+          return sum + (prod ? prod.price : 30.00);
+        }, 0);
+
+        let tierMsg = "Add skincare products above to unlock VIP savings!";
+        if (coreQty >= 1 && coreQty <= 2) {
+          tierMsg = "🎉 " + t1 + "% Off unlocked! Add 1 more to unlock " + t2 + "% Off + Free Gift!";
+        } else if (coreQty === 3) {
+          tierMsg = "🔥 " + t2 + "% Off + Free Gift unlocked! Add 1 more to unlock " + t3 + "% VIP Off!";
+        } else if (coreQty >= 4) {
+          tierMsg = "👑 " + t3 + "% VIP Off + Free Gift fully unlocked! Maximum savings applied.";
+        }
+
+        return e("div", null,
+          e("div", { style: { fontSize: "11px", fontWeight: "700", color: "#4a5568", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "8px", textAlign: "center", fontStyle: "italic" } }, tierMsg),
+          e("div", { className: "summary-row", style: { borderTop: "1px solid #e2e8f0", paddingTop: "8px" } },
+            e("span", { className: "summary-text" }, 
+              totalQty === 0 ? "Choose your items" : 
+              (totalQty === 1 ? "1 Item Selected" : totalQty + " Items Selected")
+            ),
+            e("div", { style: { textAlign: "right" } },
+              subtotalPrice > discountedTotal && e("span", { style: { fontSize: "13px", textDecoration: "line-through", color: "#a0aec0", marginRight: "8px", fontWeight: "600" } }, "$" + subtotalPrice.toFixed(2)),
+              e("span", { className: "summary-total" }, "$" + discountedTotal.toFixed(2)),
+              discPercent > 0 && e("div", { style: { fontSize: "10px", fontWeight: "bold", color: "var(--primary-color)" } }, discPercent + "% Volume Savings Applied")
+            )
+          )
+        );
+      }, [coreVariants, addonVariants, liveProducts, discountProfiles]);
+
       if (!profile) {
         return e("div", { style: { display: "flex", alignItems: "center", justifyContent: "center", minHeight: "80vh" } },
           e("div", { className: "card", style: { maxWidth: "420px", width: "95%", padding: "40px", border: "1px solid #eae6df", background: "#ffffff", borderRadius: "4px", boxShadow: "0 24px 64px rgba(0,0,0,0.02)", textAlign: "center" } },
@@ -3074,7 +3350,7 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
                       }, "+")
                     )
                   ),
-                  e("div", { className: "price-tag" }, isOutOfStock ? "Out of Stock" : "$" + prod.price.toFixed(2))
+                  e("div", { className: "price-tag" }, isOutOfStock ? "Out of Stock" : (isSelected ? "Added ✓" : "$" + prod.price.toFixed(2)))
                 );
               })
             ),
@@ -3102,104 +3378,7 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
           e("div", null,
             e("div", { className: "section-title" }, contract ? "📦 Customize Upcoming Box" : "🛍️ Build Your Dynamic Box"),
             
-            // Glow-Style Volume Breaks Upsell Widget
-            React.useMemo(() => {
-              const currentQty = coreVariants.length;
-              const t1Active = currentQty === 1 || currentQty === 2;
-              const t2Active = currentQty === 3;
-              const t3Active = currentQty >= 4;
-
-              // Dynamically resolve active discount profile matching user selections
-              const currentActiveProfile = (() => {
-                for (const vId of coreVariants) {
-                  const matched = discountProfiles.find(p => p.assignedVariants && p.assignedVariants.includes(vId));
-                  if (matched) return matched;
-                }
-                return discountProfiles[0] || { tier1: 15, tier2: 20, tier3: 25 };
-              })();
-
-              const t1Val = currentActiveProfile.tier1 !== undefined ? currentActiveProfile.tier1 : 15;
-              const t2Val = currentActiveProfile.tier2 !== undefined ? currentActiveProfile.tier2 : 20;
-              const t3Val = currentActiveProfile.tier3 !== undefined ? currentActiveProfile.tier3 : 25;
-
-              // Check if at least 1 core item belongs to an active, assigned discount profile!
-              const hasEligibleCoreItem = coreVariants.some(vId => {
-                const profileMatch = discountProfiles.find(p => p.assignedVariants && p.assignedVariants.includes(vId));
-                if (!profileMatch) return false;
-                const t1 = profileMatch.tier1 || 0;
-                const t2 = profileMatch.tier2 || 0;
-                const t3 = profileMatch.tier3 || 0;
-                return t1 > 0 || t2 > 0 || t3 > 0;
-              });
-
-              if (!hasEligibleCoreItem) return null; // HIDES the widget entirely if no eligible products exist in their core box!
-
-              const activeStyle = {
-                border: "1.5px solid var(--primary-color)",
-                background: "var(--primary-light)",
-                boxShadow: "none"
-              };
-
-              return e("div", { style: { marginBottom: "20px" } },
-                e("div", { style: { fontSize: "11px", fontWeight: "700", color: "#2c3e50", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "8px", display: "flex", justifyContent: "space-between", alignItems: "center" } }, 
-                  e("span", null, "🔥 Glow Volume Breaks"),
-                  currentQty > 0 && e("span", { style: { color: "var(--primary-color)", fontSize: "10px", fontWeight: "bold" } }, currentQty + " " + (currentQty === 1 ? "Item" : "Items") + " Selected")
-                ),
-                e("div", { style: { display: "flex", gap: "8px" } },
-                  // Tier 1 (1-2 items)
-                  e("div", { 
-                    style: { 
-                      flex: 1, 
-                      padding: "8px", 
-                      borderRadius: "4px", 
-                      border: "1px solid #eae6df", 
-                      background: "white", 
-                      textAlign: "center",
-                      transition: "all 0.2s",
-                      ...(t1Active ? activeStyle : {})
-                    }
-                  },
-                    e("div", { style: { fontSize: "10px", fontWeight: "bold", color: t1Active ? "var(--primary-color)" : "#718096" } }, "1-2 Items"),
-                    e("div", { style: { fontSize: "12px", fontWeight: "800", color: t1Active ? "var(--primary-color)" : "#2d3748", margin: "2px 0" } }, t1Val + "% OFF"),
-                    e("span", { style: { fontSize: "8px", background: t1Active ? "var(--primary-color)" : "#718096", color: "white", padding: "1px 4px", borderRadius: "2px" } }, t1Active ? "✓ Active" : "Bronze")
-                  ),
-                  // Tier 2 (3 items)
-                  e("div", { 
-                    style: { 
-                      flex: 1, 
-                      padding: "8px", 
-                      borderRadius: "4px", 
-                      border: "1px solid #eae6df", 
-                      background: "white", 
-                      textAlign: "center",
-                      transition: "all 0.2s",
-                      ...(t2Active ? activeStyle : {})
-                    }
-                  },
-                    e("div", { style: { fontSize: "10px", fontWeight: "bold", color: t2Active ? "var(--primary-color)" : "#718096" } }, "3 Items"),
-                    e("div", { style: { fontSize: "12px", fontWeight: "800", color: t2Active ? "var(--primary-color)" : "#2d3748", margin: "2px 0" } }, t2Val + "% OFF"),
-                    e("span", { style: { fontSize: "8px", background: t2Active ? "var(--primary-color)" : "#718096", color: "white", padding: "1px 4px", borderRadius: "2px" } }, t2Active ? "✓ Active" : "Silver")
-                  ),
-                  // Tier 3 (4+ items)
-                  e("div", { 
-                    style: { 
-                      flex: 1, 
-                      padding: "8px", 
-                      borderRadius: "4px", 
-                      border: "1px solid #eae6df", 
-                      background: "white", 
-                      textAlign: "center",
-                      transition: "all 0.2s",
-                      ...(t3Active ? activeStyle : {})
-                    }
-                  },
-                    e("div", { style: { fontSize: "10px", fontWeight: "bold", color: t3Active ? "var(--primary-color)" : "#718096" } }, "4+ Items"),
-                    e("div", { style: { fontSize: "12px", fontWeight: "800", color: t3Active ? "var(--primary-color)" : "#2d3748", margin: "2px 0" } }, t3Val + "% OFF"),
-                    e("span", { style: { fontSize: "8px", background: t3Active ? "var(--primary-color)" : "#718096", color: "white", padding: "1px 4px", borderRadius: "2px" } }, t3Active ? "✓ Active" : "Gold / Max")
-                  )
-                )
-              );
-            }, [coreVariants, discountProfiles]),
+            volumeBreaksWidget,
 
             // Visual Slots showing chosen items (Core Recurring subscription Box!)
             e("div", { style: { marginBottom: "20px", textAlign: "center", background: "#f8fafc", padding: "12px", borderRadius: "12px", border: "1px solid #e2e8f0" } },
@@ -3307,127 +3486,9 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
               )
             ),
 
-            // Dynamic Surprise & Delight Milestone Selector (unlocked when ordersCompleted >= milestoneCount)
-            React.useMemo(() => {
-              if (!contract || contract.ordersCompleted < milestoneCount) return null;
-              
-              // Parse current items to see if a free milestone gift is already claimed
-              const currentItems = typeof contract.items === "string" ? JSON.parse(contract.items) : contract.items;
-              const hasAlreadyClaimed = currentItems.some(it => it.isFreeGift);
-              if (hasAlreadyClaimed) return null; // hides selector once claimed!
+            milestoneSelectorWidget,
 
-              return e("div", { className: "free-gift-card", style: { background: "linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%)", border: "2px dashed #008060", padding: "16px", borderRadius: "12px", marginBottom: "20px" } },
-                e("div", { style: { fontSize: "36px" } }, "🎁"),
-                e("div", { style: { flex: 1 } },
-                  e("span", { className: "free-gift-badge", style: { background: "#008060", color: "white", fontSize: "9px", padding: "2px 6px", borderRadius: "10px", fontWeight: "bold" } }, "👑 Milestone Unlocked"),
-                  e("div", { style: { fontSize: "14px", fontWeight: "bold", color: "#14532d", marginTop: "4px" } }, "Congratulations! You completed " + contract.ordersCompleted + " orders."),
-                  e("p", { style: { fontSize: "12px", color: "#166534", margin: "4px 0 12px 0" } }, "Select exactly 1 free reward from our milestone catalog to include in your next upcoming box shipment:"),
-                  
-                  e("div", { style: { display: "flex", gap: "10px", alignItems: "center", marginBottom: "12px", flexWrap: "wrap" } },
-                    e("select", {
-                      value: selectedGiftId,
-                      onChange: (ev) => setSelectedGiftId(ev.target.value),
-                      style: { flex: 1, padding: "8px", borderRadius: "6px", border: "1px solid #008060", fontSize: "13px", outline: "none", background: "white", cursor: "pointer" }
-                    },
-                      e("option", { value: "" }, "Choose your deluxe gift..."),
-                      eligibleGifts.map(gId => {
-                        let name = "Deluxe Product Gift";
-                        if (gId === "gid://shopify/ProductVariant/5001") name = "Vitamin C Serum (Free Gift)";
-                        else if (gId === "gid://shopify/ProductVariant/5002") name = "Charcoal Face Mask (Free Gift)";
-                        else if (gId === "gid://shopify/ProductVariant/5003") name = "Moisturizer (Free Gift)";
-                        return e("option", { key: gId, value: gId }, name);
-                      })
-                    ),
-                    e("button", { 
-                      className: "button-primary",
-                      disabled: !selectedGiftId || claimingGift,
-                      onClick: claimMilestoneGift,
-                      style: { padding: "8px 16px", background: "#008060", color: "white", border: "none", borderRadius: "6px", fontSize: "13px", fontWeight: "bold", cursor: "pointer" }
-                    }, claimingGift ? "⏳ Claiming..." : "🎁 Add Gift to Box")
-                  )
-                )
-              );
-            }, [contract, selectedGiftId, claimingGift, eligibleGifts, milestoneCount]),
-
-            // Visual Rewards, Add-on & Free Gift Manager (Like Bliss / Poppin / Peak Fuel)
-            React.useMemo(() => {
-              const contractItems = contract ? (typeof contract.items === "string" ? JSON.parse(contract.items) : contract.items) : [];
-              const activeGifts = contractItems.filter(it => it.isFreeGift);
-              
-              const hasUnlockedBuilderGift = !contract && isFreeGiftUnlocked;
-              const hasClaimedActiveGift = contract && activeGifts.length > 0;
-              
-              if (!hasUnlockedBuilderGift && !hasClaimedActiveGift) {
-                return null; // COMPLETELY HIDES the entire card section if no perks exist!
-              }
-
-              return e("div", { style: { marginBottom: "20px", background: "#fcfaf6", padding: "14px", borderRadius: "4px", border: "1px dashed var(--primary-color)" } },
-                e("div", { style: { fontSize: "11px", fontWeight: "700", color: "var(--primary-color)", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "8px" } }, "🎁 Unlocked Routine Perks & Gifts"),
-                e("div", { style: { display: "flex", flexDirection: "column", gap: "8px" } },
-                  // 1. Dynamic Auto-Unlocked Builder Free Gift
-                  hasUnlockedBuilderGift && e("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 12px", background: "#fff", borderRadius: "4px", border: "1px solid #feebc8" } },
-                    e("div", { style: { display: "flex", alignItems: "center", gap: "8px" } },
-                      e("span", { style: { fontSize: "18px" } }, "🎁"),
-                      e("div", null,
-                        e("div", { style: { fontSize: "12px", fontWeight: "bold", color: "#7b341e" } }, "Complimentary Hydrating Aloe Deluxe Sample"),
-                        e("span", { className: "free-gift-badge", style: { fontSize: "8px", padding: "1px 4px", background: "#008060" } }, "UNLOCKED GIFT")
-                      )
-                    ),
-                    e("span", { style: { fontSize: "12px", fontWeight: "bold", color: "#008060" } }, "FREE")
-                  ),
-                  
-                  // 2. Active Claimed Milestone Gifts (with tactile ✕ Remove option at the DB level!)
-                  hasClaimedActiveGift && activeGifts.map((it, idx) => {
-                    const handleRemoveMilestoneGift = () => {
-                      setActivating(true);
-                      const updatedItems = contractItems.filter(item => item.variantId !== it.variantId);
-                      fetch("/api/storefront/portal/update-items", {
-                        method: "POST",
-                        headers: { 
-                          "Content-Type": "application/json",
-                          "x-shop-domain": "${shop}",
-                          "x-test-session-id": "beauty-portal-session"
-                        },
-                        body: JSON.stringify({ 
-                          contractId: contract.id, 
-                          items: updatedItems
-                        })
-                      })
-                      .then(res => res.json())
-                      .then(data => {
-                        if (data.success) {
-                          setContract(data.contract);
-                          setNotification("🔄 Milestone gift removed! You can now select a different reward.");
-                          setTimeout(() => setNotification(null), 3000);
-                        }
-                        setActivating(false);
-                      })
-                      .catch(err => {
-                        console.error("Failed to remove milestone gift:", err);
-                        setActivating(false);
-                      });
-                    };
-
-                    return e("div", { key: "gift-" + idx, style: { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 12px", background: "#fff", borderRadius: "4px", border: "1px solid #b8dfc4" } },
-                      e("div", { style: { display: "flex", alignItems: "center", gap: "8px" } },
-                        e("span", { style: { fontSize: "18px" } }, "🎁"),
-                        e("div", null,
-                          e("div", { style: { fontSize: "12px", fontWeight: "bold", color: "#14532d" } }, it.productName + " (VIP Reward)"),
-                          e("span", { className: "free-gift-badge", style: { fontSize: "8px", padding: "1px 4px", background: "#008060" } }, "MILESTONE CLAIMED")
-                        )
-                      ),
-                      e("div", { style: { display: "flex", alignItems: "center", gap: "10px" } },
-                        e("span", { style: { fontSize: "12px", fontWeight: "bold", color: "#008060" } }, "FREE"),
-                        e("button", { 
-                          onClick: handleRemoveMilestoneGift,
-                          style: { background: "none", border: "none", color: "#e53e3e", fontWeight: "bold", cursor: "pointer", fontSize: "14px", padding: "0 4px" }
-                        }, "✕")
-                      )
-                    );
-                  })
-                )
-              );
-            }, [contract, isFreeGiftUnlocked]),
+            unlockedRewardsWidget,
 
             // Select Delivery Interval & Start Date (if no contract exists yet)
             !contract && e("div", { style: { display: "flex", gap: "12px", marginBottom: "20px", flexWrap: "wrap" } },
@@ -3457,67 +3518,7 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
 
             // Dynamic Sticky Footer (Supports Glow Tiered Volume Discounts)
             e("div", { className: "sticky-footer" },
-              React.useMemo(() => {
-                const subtotalPrice = coreVariants.reduce((sum, vId) => {
-                  const prod = liveProducts.find(p => p.variantId === vId);
-                  return sum + (prod ? prod.price : 30.00);
-                }, 0) + addonVariants.reduce((sum, vId) => {
-                  const prod = liveProducts.find(p => p.variantId === vId);
-                  return sum + (prod ? prod.price : 30.00);
-                }, 0);
-
-                const coreQty = coreVariants.length;
-                const totalQty = coreVariants.length + addonVariants.length;
-
-                // Dynamically resolve active discount profile matching user selections
-                const currentActiveProfile = (() => {
-                  for (const vId of coreVariants) {
-                    const matched = discountProfiles.find(p => p.assignedVariants && p.assignedVariants.includes(vId));
-                    if (matched) return matched;
-                  }
-                  return discountProfiles[0] || { tier1: 15, tier2: 20, tier3: 25 };
-                })();
-
-                const t1 = currentActiveProfile.tier1 || 0;
-                const t2 = currentActiveProfile.tier2 || 0;
-                const t3 = currentActiveProfile.tier3 || 0;
-
-                const discPercent = coreQty >= 4 ? t3 : (coreQty === 3 ? t2 : t1);
-                
-                // Calculate actual discounted total using our dynamic helper!
-                const discountedTotal = coreVariants.reduce((sum, vId) => {
-                  const prod = liveProducts.find(p => p.variantId === vId);
-                  const basePrice = prod ? prod.price : 30.00;
-                  return sum + getCustomDiscountPrice(vId, basePrice);
-                }, 0) + addonVariants.reduce((sum, vId) => {
-                  const prod = liveProducts.find(p => p.variantId === vId);
-                  return sum + (prod ? prod.price : 30.00);
-                }, 0);
-
-                let tierMsg = "Add skincare products above to unlock VIP savings!";
-                if (coreQty >= 1 && coreQty <= 2) {
-                  tierMsg = "🎉 " + t1 + "% Off unlocked! Add 1 more to unlock " + t2 + "% Off + Free Gift!";
-                } else if (coreQty === 3) {
-                  tierMsg = "🔥 " + t2 + "% Off + Free Gift unlocked! Add 1 more to unlock " + t3 + "% VIP Off!";
-                } else if (coreQty >= 4) {
-                  tierMsg = "👑 " + t3 + "% VIP Off + Free Gift fully unlocked! Maximum savings applied.";
-                }
-
-                return e("div", null,
-                  e("div", { style: { fontSize: "11px", fontWeight: "700", color: "#4a5568", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "8px", textAlign: "center", fontStyle: "italic" } }, tierMsg),
-                  e("div", { className: "summary-row", style: { borderTop: "1px solid #e2e8f0", paddingTop: "8px" } },
-                    e("span", { className: "summary-text" }, 
-                      totalQty === 0 ? "Choose your items" : 
-                      (totalQty === 1 ? "1 Item Selected" : totalQty + " Items Selected")
-                    ),
-                    e("div", { style: { textAlign: "right" } },
-                      subtotalPrice > discountedTotal && e("span", { style: { fontSize: "13px", textDecoration: "line-through", color: "#a0aec0", marginRight: "8px", fontWeight: "600" } }, "$" + subtotalPrice.toFixed(2)),
-                      e("span", { className: "summary-total" }, "$" + discountedTotal.toFixed(2)),
-                      discPercent > 0 && e("div", { style: { fontSize: "10px", fontWeight: "bold", color: "var(--primary-color)" } }, discPercent + "% Volume Savings Applied")
-                    )
-                  )
-                );
-              }, [coreVariants, addonVariants, liveProducts, discountProfiles]),
+              dynamicStickyFooter,
               
               contract ? (
                 e("button", { 
@@ -3580,18 +3581,21 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
                   e("p", { style: { fontSize: "12px", color: "#4a5568", lineHeight: "1.6", margin: "6px 0 12px 0" } }, 
                     "This professional-grade formulation is dynamically matched with your active Beauty profile. Crafted using premium, cruelty-free botanicals designed to lock in long-lasting hydration, balance tones, and actively restore skin cell barriers naturally."
                   ),
-                  
+
                   e("div", { style: { display: "flex", gap: "10px" } },
-                    e("button", { 
-                      className: "btn-primary", 
-                      disabled: activeModalProduct.stockLevel <= 0,
-                      onClick: () => {
-                        handleIncrement(activeModalProduct.variantId);
-                        setActiveModalProduct(null);
-                      },
-                      style: { flex: 1, padding: "12px", fontSize: "13px" }
-                    }, activeModalProduct.stockLevel <= 0 ? "Out of Stock" : "Add to Routine Routine Box"),
-                    
+                    (() => {
+                      const isAlreadyInBox = coreVariants.includes(activeModalProduct.variantId) || addonVariants.includes(activeModalProduct.variantId);
+                      return e("button", { 
+                        className: "btn-primary", 
+                        disabled: activeModalProduct.stockLevel <= 0 || isAlreadyInBox,
+                        onClick: () => {
+                          handleIncrement(activeModalProduct.variantId);
+                          setActiveModalProduct(null);
+                        },
+                        style: { flex: 1, padding: "12px", fontSize: "13px" }
+                      }, activeModalProduct.stockLevel <= 0 ? "Out of Stock" : (isAlreadyInBox ? "Added to Box ✓" : "Add to Routine Box"));
+                    })(),
+
                     e("button", { 
                       className: "btn-secondary", 
                       onClick: () => setActiveModalProduct(null),
