@@ -1082,13 +1082,13 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
 
       let items = JSON.parse(contract.items || "[]");
       
-      // Calculate current total quantity of this variantId already in the box as an add-on
-      const existingAddonQty = items
-        .filter((it: any) => it.variantId === variantId && it.isAddOn)
+      // Calculate current total quantity of all add-on products combined inside the box
+      const totalAddonsQty = items
+        .filter((it: any) => it.isAddOn)
         .reduce((sum: number, it: any) => sum + (it.quantity || 1), 0);
 
-      if (existingAddonQty >= maxAddonLimit) {
-        return res.status(400).json({ error: `Maximum add-on limit of ${maxAddonLimit} reached for this product!` });
+      if (totalAddonsQty >= maxAddonLimit) {
+        return res.status(400).json({ error: `You have reached the maximum allowed limit of ${maxAddonLimit} add-on product(s) in total per box!` });
       }
 
       // If already in the items, we can increment its quantity, or add it
@@ -1148,10 +1148,12 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
       }
 
       // Validate incoming items list for add-on constraints
-      for (const it of items) {
-        if (it.isAddOn && (it.quantity || 1) > maxAddonLimit) {
-          return res.status(400).json({ error: `You can only include up to ${maxAddonLimit} of the add-on "${it.productName}" per box!` });
-        }
+      const totalAddonsQty = items
+        .filter((it: any) => it.isAddOn)
+        .reduce((sum: number, it: any) => sum + (it.quantity || 1), 0);
+
+      if (totalAddonsQty > maxAddonLimit) {
+        return res.status(400).json({ error: `You can only include up to ${maxAddonLimit} subscription add-on product(s) in total per box!` });
       }
 
       const updated = await prisma.subscriptionContract.update({
@@ -1271,6 +1273,10 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
         smartDunningDay: 1, // Retries scheduler recovers on day 1 optimal payroll by default
         slotLabels: ["Cleanse 🧴", "Treat 🔮", "Restore ❄️"], // premium skincare visual steps guides by default
         eligibleAddonVariantIds: liveProductGids, // approved subscription add-ons by default
+        vipRedemptions: liveProductGids.slice(0, 2).map((vId, idx) => ({
+          variantId: vId,
+          points: idx === 0 ? 30 : 50
+        })), // approved loyalty point-redemptions mapping by default
         discountProfiles: [
           {
             id: "profile-default",
@@ -1304,7 +1310,7 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
   // POST /api/admin/theme-settings (Update theme colors and branding settings)
   app.post("/api/admin/theme-settings", async (req, res) => {
     try {
-      const { shop, themePrimaryColor, themeSecondaryColor, maxAddonLimit, minStartDateDays, abTestSplitActive, smartDunningDay, slotLabels, eligibleAddonVariantIds, discountProfiles } = req.body;
+      const { shop, themePrimaryColor, themeSecondaryColor, maxAddonLimit, minStartDateDays, abTestSplitActive, smartDunningDay, slotLabels, eligibleAddonVariantIds, vipRedemptions, discountProfiles } = req.body;
       if (!shop) {
         return res.status(400).json({ error: "Missing required shop parameter" });
       }
@@ -1331,6 +1337,10 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
       const existingDunning = allConfigs[shop]?.smartDunningDay !== undefined ? allConfigs[shop].smartDunningDay : 1;
       const existingLabels = allConfigs[shop]?.slotLabels || ["Cleanse 🧴", "Treat 🔮", "Restore ❄️"];
       const existingAddons = allConfigs[shop]?.eligibleAddonVariantIds || liveProductGids;
+      const existingVipRedemptions = allConfigs[shop]?.vipRedemptions || liveProductGids.slice(0, 2).map((vId, idx) => ({
+        variantId: vId,
+        points: idx === 0 ? 30 : 50
+      }));
       const existingProfiles = allConfigs[shop]?.discountProfiles || [
         {
           id: "profile-default",
@@ -1351,6 +1361,7 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
         smartDunningDay: smartDunningDay !== undefined ? parseInt(smartDunningDay) : existingDunning,
         slotLabels: slotLabels || existingLabels,
         eligibleAddonVariantIds: eligibleAddonVariantIds || existingAddons,
+        vipRedemptions: vipRedemptions || existingVipRedemptions,
         discountProfiles: discountProfiles || existingProfiles
       };
 
@@ -1628,6 +1639,10 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
       let minStartDateDays = 2; // default 2 days min from checkout
       let slotLabels = ["Cleanse 🧴", "Treat 🔮", "Restore ❄️"]; // premium skincare visual steps guides by default
       let eligibleAddonVariantIds = shopifyProducts.map(p => p.variantId);
+      let vipRedemptions = shopifyProducts.slice(0, 2).map((p, idx) => ({
+        variantId: p.variantId,
+        points: idx === 0 ? 30 : 50
+      }));
       let discountProfiles = [
         {
           id: "profile-default",
@@ -1654,6 +1669,9 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
             }
             if (allConfigs[shop].eligibleAddonVariantIds) {
               eligibleAddonVariantIds = allConfigs[shop].eligibleAddonVariantIds;
+            }
+            if (allConfigs[shop].vipRedemptions) {
+              vipRedemptions = allConfigs[shop].vipRedemptions;
             }
             if (allConfigs[shop].discountProfiles) {
               discountProfiles = allConfigs[shop].discountProfiles;
@@ -2229,6 +2247,7 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
       const eligibleGifts = ${JSON.stringify(giftIds)};
       const discountProfiles = ${JSON.stringify(discountProfiles)};
       const eligibleAddons = ${JSON.stringify(eligibleAddonVariantIds)};
+      const vipRedemptions = ${JSON.stringify(vipRedemptions)};
 
       const [selectedGiftId, setSelectedGiftId] = React.useState("");
       const [claimingGift, setClaimingGift] = React.useState(false);
@@ -2300,6 +2319,7 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
       const [searchQuery, setSearchQuery] = React.useState("");
       const [currentPage, setCurrentPage] = React.useState(1);
       const [strictFilter, setStrictFilter] = React.useState(false);
+      const [selectedStepFilter, setSelectedStepFilter] = React.useState("All");
       const itemsPerPage = 6;
 
       const minStartDateDays = ${minStartDateDays};
@@ -2311,9 +2331,14 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
       const [customStartDate, setCustomStartDate] = React.useState(getMinDateStr());
       const [isRescheduling, setIsRescheduling] = React.useState(false);
 
+      const handleRemoveFromBox = (variantId) => {
+        setCoreVariants(coreVariants.filter(id => id !== variantId));
+        setAddonVariants(addonVariants.filter(id => id !== variantId));
+      };
+
       React.useEffect(() => {
         setCurrentPage(1);
-      }, [searchQuery, strictFilter]);
+      }, [searchQuery, strictFilter, selectedStepFilter]);
 
       // Calculate dynamic quantities & prices
       const getProductQty = (vId) => coreVariants.filter(id => id === vId).length;
@@ -2368,6 +2393,18 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
         const currentSkin = profile ? profile.skinType : formSkinType;
         const currentConcern = profile ? (profile.concerns?.[0] || "aging") : (formConcerns?.[0] || "aging");
 
+        const getProductStep = (p) => {
+          const name = p.productName.toLowerCase();
+          if (name.includes("clean") || name.includes("wash") || name.includes("foam") || name.includes("soap")) return "Cleanse";
+          if (name.includes("treat") || name.includes("serum") || name.includes("acid") || name.includes("mask") || name.includes("peel")) return "Treat";
+          if (name.includes("moistur") || name.includes("cream") || name.includes("lotion") || name.includes("restore") || name.includes("balm") || name.includes("shield")) return "Restore";
+          // Dynamic fallback to ensure balance
+          const code = p.variantId.charCodeAt(p.variantId.length - 1) || 0;
+          if (code % 3 === 0) return "Cleanse";
+          if (code % 3 === 1) return "Treat";
+          return "Restore";
+        };
+
         // 1. Search Filter (by name case-insensitively)
         let filtered = [...liveProducts];
         if (searchQuery.trim()) {
@@ -2375,7 +2412,12 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
           filtered = filtered.filter(p => p.productName.toLowerCase().includes(q));
         }
 
-        // 2. Strict Skin Profile & Allergen Filter
+        // 2. Step Filter (Cleanse, Treat, Restore)
+        if (selectedStepFilter !== "All") {
+          filtered = filtered.filter(p => getProductStep(p) === selectedStepFilter);
+        }
+
+        // 3. Strict Skin Profile & Allergen Filter
         if (strictFilter) {
           filtered = filtered.filter(p => {
             const name = p.productName.toLowerCase();
@@ -2795,6 +2837,10 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
       };
       const setFrequency = (days) => triggerAction("/api/storefront/portal/frequency", { frequencyDays: days });
       const addDynamicAddOn = () => {
+        if (addonVariants.length >= maxAddonLimit) {
+          alert("You have reached the maximum allowed limit of " + maxAddonLimit + " add-on product(s) in total per box!");
+          return;
+        }
         const currentSkin = profile ? profile.skinType : "dry";
         const currentAllergens = profile ? (profile.allergens || []) : [];
 
@@ -3455,6 +3501,30 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
                 e("label", { htmlFor: "strict_filter_checkbox", style: { fontSize: "12px", fontWeight: "700", color: "#4a5568", textTransform: "uppercase", letterSpacing: "0.5px", cursor: "pointer" } }, "🛡️ Filter by Profile")
               )
             ),
+
+            // Tactile Routine Step Filters Button Bar
+            e("div", { style: { display: "flex", gap: "8px", marginBottom: "16px", flexWrap: "wrap" } },
+              ["All", "Cleanse", "Treat", "Restore"].map(step => {
+                const isActive = selectedStepFilter === step;
+                const label = step === "All" ? "✨ All Products" : (step === "Cleanse" ? "🧴 Cleanse" : (step === "Treat" ? "🔮 Treat" : "❄️ Restore"));
+                return e("button", {
+                  key: step,
+                  onClick: () => { setSelectedStepFilter(step); setCurrentPage(1); },
+                  style: {
+                    padding: "6px 12px",
+                    borderRadius: "20px",
+                    fontSize: "11px",
+                    fontWeight: isActive ? "700" : "500",
+                    border: "1px solid " + (isActive ? "var(--primary-color)" : "#eae6df"),
+                    background: isActive ? "var(--primary-color)" : "white",
+                    color: isActive ? "white" : "#4a5568",
+                    cursor: "pointer",
+                    outline: "none",
+                    transition: "all 0.3s"
+                  }
+                }, label);
+              })
+            ),
             // Catalog Grid
             e("div", { className: "product-grid" },
               pipelineData.products.map((prod) => {
@@ -3596,14 +3666,16 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
               e("p", { style: { fontSize: "11px", color: "#718096", margin: "0 0 12px 0" } }, "Use your active subscriber points to redeem premium skincare add-ons for absolutely free! Your Wallet: " + glowPoints + " points."),
               
               e("div", { style: { display: "flex", flexDirection: "column", gap: "10px" } },
-                liveProducts.slice(0, 3).map(p => {
-                  const pointsCost = Math.max(10, Math.round((p.price || 30.00) * 1.5));
-                  const canRedeem = glowPoints >= pointsCost;
-                  const isAlreadyAdded = addonVariants.includes(p.variantId);
-                  const name = p.productName + " (VIP Reward)";
-                  const desc = p.variantTitle && p.variantTitle !== "Default Title" ? p.variantTitle : "Premium Dynamic Box Perk";
+                vipRedemptions.map(item => {
+                  const prod = liveProducts.find(p => p.variantId === item.variantId);
+                  if (!prod) return null;
                   
-                  return e("div", { key: p.variantId, style: { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px", background: "#fff", borderRadius: "4px", border: "1px solid #eae6df" } },
+                  const canRedeem = glowPoints >= item.points;
+                  const isAlreadyAdded = addonVariants.includes(item.variantId);
+                  const name = prod.productName + " (VIP Reward)";
+                  const desc = prod.variantTitle && prod.variantTitle !== "Default Title" ? prod.variantTitle : "Premium Dynamic Box Perk";
+                  
+                  return e("div", { key: item.variantId, style: { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px", background: "#fff", borderRadius: "4px", border: "1px solid #eae6df" } },
                     e("div", { style: { flex: 1, paddingRight: "10px" } },
                       e("div", { style: { fontSize: "12px", fontWeight: "bold", color: "#2d3748" } }, name),
                       e("div", { style: { fontSize: "10px", color: "#718096" } }, desc)
@@ -3611,9 +3683,9 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
                     e("button", {
                       className: "btn-primary",
                       disabled: !canRedeem || isAlreadyAdded || activating,
-                      onClick: () => handleRedeemPoints(p.variantId, pointsCost),
+                      onClick: () => handleRedeemPoints(item.variantId, item.points),
                       style: { padding: "6px 14px", fontSize: "11px", minWidth: "100px" }
-                    }, isAlreadyAdded ? "Redeemed ✓" : pointsCost + " Points")
+                    }, isAlreadyAdded ? "Redeemed ✓" : item.points + " Points")
                   );
                 })
               )
@@ -3754,18 +3826,29 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
                     "This professional-grade formulation is dynamically matched with your active Beauty profile. Crafted using premium, cruelty-free botanicals designed to lock in long-lasting hydration, balance tones, and actively restore skin cell barriers naturally."
                   ),
 
-                  e("div", { style: { display: "flex", gap: "10px" } },
+                  e("div", { style: { display: "flex", gap: "10px", flexWrap: "wrap", width: "100%" } },
                     (() => {
                       const isAlreadyInBox = coreVariants.includes(activeModalProduct.variantId) || addonVariants.includes(activeModalProduct.variantId);
-                      return e("button", { 
-                        className: "btn-primary", 
-                        disabled: activeModalProduct.stockLevel <= 0 || isAlreadyInBox,
-                        onClick: () => {
-                          handleIncrement(activeModalProduct.variantId);
-                          setActiveModalProduct(null);
-                        },
-                        style: { flex: 1, padding: "12px", fontSize: "13px" }
-                      }, activeModalProduct.stockLevel <= 0 ? "Out of Stock" : (isAlreadyInBox ? "Added to Box ✓" : "Add to Routine Box"));
+                      return e("div", { style: { display: "flex", gap: "10px", flex: 1 } },
+                        e("button", { 
+                          className: "btn-primary", 
+                          disabled: activeModalProduct.stockLevel <= 0 || isAlreadyInBox,
+                          onClick: () => {
+                            handleIncrement(activeModalProduct.variantId);
+                            setActiveModalProduct(null);
+                          },
+                          style: { flex: 1, padding: "12px", fontSize: "13px" }
+                        }, activeModalProduct.stockLevel <= 0 ? "Out of Stock" : (isAlreadyInBox ? "Added to Box ✓" : "Add to Routine Box")),
+                        
+                        isAlreadyInBox && e("button", {
+                          className: "btn-secondary",
+                          onClick: () => {
+                            handleRemoveFromBox(activeModalProduct.variantId);
+                            setActiveModalProduct(null);
+                          },
+                          style: { flex: 1, padding: "12px", fontSize: "13px", color: "#e53e3e", borderColor: "#fed7d7", background: "#fff5f5" }
+                        }, "Remove from Box")
+                      );
                     })(),
 
                     e("button", { 
@@ -5229,6 +5312,20 @@ app.get("/", (req, res) => {
       const [adminTier3, setAdminTier3] = React.useState(25);
       const [adminAddons, setAdminAddons] = React.useState([]);
       const [adminDiscountProfiles, setAdminDiscountProfiles] = React.useState([]);
+      const [adminVipRedemptions, setAdminVipRedemptions] = React.useState([]);
+
+      const handleVipToggle = (variantId) => {
+        const existing = adminVipRedemptions.find(x => x.variantId === variantId);
+        if (existing) {
+          setAdminVipRedemptions(adminVipRedemptions.filter(x => x.variantId !== variantId));
+        } else {
+          setAdminVipRedemptions([...adminVipRedemptions, { variantId, points: 30 }]);
+        }
+      };
+
+      const handleVipPointsChange = (variantId, points) => {
+        setAdminVipRedemptions(adminVipRedemptions.map(x => x.variantId === variantId ? { ...x, points: parseInt(points) || 10 } : x));
+      };
 
       React.useEffect(() => {
         const d = new Date(Date.now() + parseInt(adminMinStartDateDays || "2") * 24 * 60 * 60 * 1000);
@@ -5588,6 +5685,7 @@ app.get("/", (req, res) => {
             if (data.minStartDateDays !== undefined) setAdminMinStartDateDays(data.minStartDateDays.toString());
             if (data.slotLabels !== undefined) setAdminSlotLabels(data.slotLabels);
             if (data.eligibleAddonVariantIds !== undefined) setAdminAddons(data.eligibleAddonVariantIds);
+            if (data.vipRedemptions !== undefined) setAdminVipRedemptions(data.vipRedemptions);
             if (data.discountProfiles !== undefined) setAdminDiscountProfiles(data.discountProfiles);
           })
           .catch(() => {});
@@ -5613,6 +5711,7 @@ app.get("/", (req, res) => {
             minStartDateDays: parseInt(minDays || "2"),
             slotLabels: adminSlotLabels,
             eligibleAddonVariantIds: addons,
+            vipRedemptions: adminVipRedemptions,
             discountProfiles: profiles
           })
         })
@@ -5635,6 +5734,9 @@ app.get("/", (req, res) => {
               }
               if (data.themeConfig.eligibleAddonVariantIds !== undefined) {
                 setAdminAddons(data.themeConfig.eligibleAddonVariantIds);
+              }
+              if (data.themeConfig.vipRedemptions !== undefined) {
+                setAdminVipRedemptions(data.themeConfig.vipRedemptions);
               }
               if (data.themeConfig.discountProfiles !== undefined) {
                 setAdminDiscountProfiles(data.themeConfig.discountProfiles);
@@ -6500,12 +6602,21 @@ app.get("/", (req, res) => {
 
         const addDynamicAddOnAdmin = () => {
           if (!portalContract) return;
+          const items = typeof portalContract.items === "string" ? JSON.parse(portalContract.items) : portalContract.items;
+          const currentAddonsQty = items
+            .filter(it => it.isAddOn)
+            .reduce((sum, it) => sum + (it.quantity || 1), 0);
+          
+          if (currentAddonsQty >= adminMaxAddonLimit) {
+            alert("This subscriber has reached the maximum allowed limit of " + adminMaxAddonLimit + " add-on product(s) in total per box!");
+            return;
+          }
+
           const eligibleAddons = adminAddons.length > 0 ? adminAddons : inventory.map(p => p.productId);
           const customerProfile = profiles.find(p => p.customerId === portalContract.customerId);
           const currentSkin = customerProfile ? customerProfile.skinType : "dry";
           const currentAllergens = customerProfile ? (customerProfile.allergens || []) : [];
           
-          const items = typeof portalContract.items === "string" ? JSON.parse(portalContract.items) : portalContract.items;
           const hasIds = items.map(it => it.variantId);
 
           const candidates = inventory.map(inv => ({
@@ -6965,6 +7076,44 @@ app.get("/", (req, res) => {
                     }),
                     e("label", { htmlFor: "addon_" + idx, style: { cursor: "pointer", fontSize: "13px" } }, 
                       formatProductName(item.productName || item.productId)
+                    )
+                  );
+                })
+              )
+            ),
+
+            // Exposing Allowed VIP Redemptions Points Catalog Mapping
+            e("div", { style: { borderTop: "1px solid #cbd5e0", paddingTop: "16px", marginBottom: "20px" } },
+              e("h4", { style: { fontSize: "14px", fontWeight: "600", color: "#2c3e50", marginBottom: "8px" } }, "✨ Configure Glow Points VIP Redemptions Catalog"),
+              e("p", { style: { color: "#6d7175", fontSize: "12px", marginBottom: "12px" } }, "Select which products are eligible for loyalty points redemption, and specify their points values."),
+              e("div", { style: { maxHeight: "200px", overflowY: "auto", border: "1px solid #e1e3e5", padding: "10px", borderRadius: "4px", backgroundColor: "#fafbfb" } },
+                inventory.map((item, idx) => {
+                  const vipItem = adminVipRedemptions.find(x => x.variantId === item.productId);
+                  const isChecked = !!vipItem;
+                  const pointsVal = vipItem ? vipItem.points : Math.max(10, Math.round((item.price || 30.0) * 1.5));
+                  
+                  return e("div", { key: idx, style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "10px" } },
+                    e("div", { style: { display: "flex", alignItems: "center" } },
+                      e("input", { 
+                        type: "checkbox", 
+                        id: "vip_" + idx, 
+                        checked: isChecked, 
+                        onChange: () => handleVipToggle(item.productId),
+                        style: { marginRight: "10px" } 
+                      }),
+                      e("label", { htmlFor: "vip_" + idx, style: { cursor: "pointer", fontSize: "13px" } }, 
+                        formatProductName(item.productName || item.productId)
+                      )
+                    ),
+                    isChecked && e("div", { style: { display: "flex", alignItems: "center", gap: "6px" } },
+                      e("span", { style: { fontSize: "11px", color: "#4a5568" } }, "Points Required:"),
+                      e("input", { 
+                        type: "number", 
+                        min: "1", 
+                        value: pointsVal, 
+                        onChange: (ev) => handleVipPointsChange(item.productId, ev.target.value), 
+                        style: { width: "70px", padding: "4px 8px", borderRadius: "4px", border: "1px solid #cbd5e0", fontSize: "12px", textAlign: "right" } 
+                      })
                     )
                   );
                 })
