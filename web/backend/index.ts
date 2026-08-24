@@ -161,12 +161,24 @@ app.post(
             });
 
             if (contract) {
+              // Parse current items list to filter out one-time add-ons and claimed milestone gifts
+              let items = [];
+              try {
+                items = JSON.parse(contract.items || "[]");
+              } catch (e) {}
+
+              // Strictly keep only recurring core subscription items, purging one-time perks
+              const cleanedItems = items.filter((it: any) => !it.isAddOn && !it.isFreeGift);
+
               const updatedContract = await prisma.subscriptionContract.update({
                 where: { id: contract.id },
-                data: { ordersCompleted: contract.ordersCompleted + 1 }
+                data: { 
+                  ordersCompleted: contract.ordersCompleted + 1,
+                  items: JSON.stringify(cleanedItems)
+                }
               });
 
-              console.log(`[Webhook Subscriber Sync] Incrementing recurring order completions: ${updatedContract.ordersCompleted} orders for ${customerId}`);
+              console.log(`[Webhook Subscriber Sync] Incrementing recurring order completions: ${updatedContract.ordersCompleted} orders for ${customerId} (One-Time Add-ons & Gifts purged)`);
 
               const dbSession = await prisma.session.findFirst({ where: { shop } });
               const milestoneCount = dbSession?.milestoneOrderCount || 3;
@@ -1068,15 +1080,45 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
       // Load max add-on limit from configuration
       const configPath = path.resolve("./theme-settings.json");
       let maxAddonLimit = 1; // default 1
+      let allConfigs: any = {};
       if (fs.existsSync(configPath)) {
         try {
           const raw = fs.readFileSync(configPath, "utf-8");
-          const allConfigs = JSON.parse(raw);
+          allConfigs = JSON.parse(raw);
           if (allConfigs[contract.shop] && allConfigs[contract.shop].maxAddonLimit !== undefined) {
             maxAddonLimit = parseInt(allConfigs[contract.shop].maxAddonLimit);
           }
         } catch (e) {
           console.error("Error loading addon limit config:", e);
+        }
+      }
+
+      // Load profile to check tenure and active campaign boosts dynamically
+      const profile = await prisma.customerProfile.findFirst({
+        where: { customerId: contract.customerId, shop: contract.shop },
+        include: { subscription: true }
+      });
+
+      let dynamicMaxLimit = maxAddonLimit;
+      if (profile) {
+        const type = allConfigs && allConfigs[contract.shop] ? allConfigs[contract.shop].promoType : "MANUAL";
+        if (type === "TENURE") {
+          const tenure = profile.subscription?.tenureMonths || 1;
+          const threshold = allConfigs && allConfigs[contract.shop] ? parseInt(allConfigs[contract.shop].tenureThresholdMonths || "6") : 6;
+          const bonus = allConfigs && allConfigs[contract.shop] ? parseInt(allConfigs[contract.shop].tenureBonusLimit || "1") : 1;
+          if (tenure >= threshold) {
+            dynamicMaxLimit = maxAddonLimit + bonus;
+          }
+        } else if (type === "CAMPAIGN") {
+          const startStr = allConfigs && allConfigs[contract.shop] ? allConfigs[contract.shop].campaignStartDate : "";
+          const endStr = allConfigs && allConfigs[contract.shop] ? allConfigs[contract.shop].campaignEndDate : "";
+          const start = new Date(startStr || "");
+          const end = new Date(endStr || "");
+          const now = new Date();
+          if (!isNaN(start.getTime()) && !isNaN(end.getTime()) && now >= start && now <= end) {
+            const bonus = allConfigs && allConfigs[contract.shop] ? parseInt(allConfigs[contract.shop].campaignBonusLimit || "2") : 2;
+            dynamicMaxLimit = maxAddonLimit + bonus;
+          }
         }
       }
 
@@ -1087,8 +1129,8 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
         .filter((it: any) => it.isAddOn)
         .reduce((sum: number, it: any) => sum + (it.quantity || 1), 0);
 
-      if (totalAddonsQty >= maxAddonLimit) {
-        return res.status(400).json({ error: `You have reached the maximum allowed limit of ${maxAddonLimit} add-on product(s) in total per box!` });
+      if (totalAddonsQty >= dynamicMaxLimit) {
+        return res.status(400).json({ error: `You have reached the maximum allowed limit of ${dynamicMaxLimit} add-on product(s) in total per box!` });
       }
 
       // If already in the items, we can increment its quantity, or add it
@@ -1135,10 +1177,11 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
       // Load max add-on limit from configuration
       const configPath = path.resolve("./theme-settings.json");
       let maxAddonLimit = 1; // default 1
+      let allConfigs: any = {};
       if (fs.existsSync(configPath)) {
         try {
           const raw = fs.readFileSync(configPath, "utf-8");
-          const allConfigs = JSON.parse(raw);
+          allConfigs = JSON.parse(raw);
           if (allConfigs[contract.shop] && allConfigs[contract.shop].maxAddonLimit !== undefined) {
             maxAddonLimit = parseInt(allConfigs[contract.shop].maxAddonLimit);
           }
@@ -1147,13 +1190,42 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
         }
       }
 
+      // Load profile to check tenure and active campaign boosts dynamically
+      const profile = await prisma.customerProfile.findFirst({
+        where: { customerId: contract.customerId, shop: contract.shop },
+        include: { subscription: true }
+      });
+
+      let dynamicMaxLimit = maxAddonLimit;
+      if (profile) {
+        const type = allConfigs && allConfigs[contract.shop] ? allConfigs[contract.shop].promoType : "MANUAL";
+        if (type === "TENURE") {
+          const tenure = profile.subscription?.tenureMonths || 1;
+          const threshold = allConfigs && allConfigs[contract.shop] ? parseInt(allConfigs[contract.shop].tenureThresholdMonths || "6") : 6;
+          const bonus = allConfigs && allConfigs[contract.shop] ? parseInt(allConfigs[contract.shop].tenureBonusLimit || "1") : 1;
+          if (tenure >= threshold) {
+            dynamicMaxLimit = maxAddonLimit + bonus;
+          }
+        } else if (type === "CAMPAIGN") {
+          const startStr = allConfigs && allConfigs[contract.shop] ? allConfigs[contract.shop].campaignStartDate : "";
+          const endStr = allConfigs && allConfigs[contract.shop] ? allConfigs[contract.shop].campaignEndDate : "";
+          const start = new Date(startStr || "");
+          const end = new Date(endStr || "");
+          const now = new Date();
+          if (!isNaN(start.getTime()) && !isNaN(end.getTime()) && now >= start && now <= end) {
+            const bonus = allConfigs && allConfigs[contract.shop] ? parseInt(allConfigs[contract.shop].campaignBonusLimit || "2") : 2;
+            dynamicMaxLimit = maxAddonLimit + bonus;
+          }
+        }
+      }
+
       // Validate incoming items list for add-on constraints
       const totalAddonsQty = items
         .filter((it: any) => it.isAddOn)
         .reduce((sum: number, it: any) => sum + (it.quantity || 1), 0);
 
-      if (totalAddonsQty > maxAddonLimit) {
-        return res.status(400).json({ error: `You can only include up to ${maxAddonLimit} subscription add-on product(s) in total per box!` });
+      if (totalAddonsQty > dynamicMaxLimit) {
+        return res.status(400).json({ error: `You can only include up to ${dynamicMaxLimit} subscription add-on product(s) in total per box!` });
       }
 
       const updated = await prisma.subscriptionContract.update({
@@ -1277,6 +1349,13 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
           variantId: vId,
           points: idx === 0 ? 30 : 50
         })), // approved loyalty point-redemptions mapping by default
+        promoType: "MANUAL",
+        tenureThresholdMonths: 6,
+        tenureBonusLimit: 1,
+        campaignName: "Black Friday Glow-Up",
+        campaignStartDate: new Date().toISOString().split("T")[0],
+        campaignEndDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
+        campaignBonusLimit: 2,
         discountProfiles: [
           {
             id: "profile-default",
@@ -1310,7 +1389,26 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
   // POST /api/admin/theme-settings (Update theme colors and branding settings)
   app.post("/api/admin/theme-settings", async (req, res) => {
     try {
-      const { shop, themePrimaryColor, themeSecondaryColor, maxAddonLimit, minStartDateDays, abTestSplitActive, smartDunningDay, slotLabels, eligibleAddonVariantIds, vipRedemptions, discountProfiles } = req.body;
+      const { 
+        shop, 
+        themePrimaryColor, 
+        themeSecondaryColor, 
+        maxAddonLimit, 
+        minStartDateDays, 
+        abTestSplitActive, 
+        smartDunningDay, 
+        slotLabels, 
+        eligibleAddonVariantIds, 
+        vipRedemptions, 
+        promoType,
+        tenureThresholdMonths,
+        tenureBonusLimit,
+        campaignName,
+        campaignStartDate,
+        campaignEndDate,
+        campaignBonusLimit,
+        discountProfiles 
+      } = req.body;
       if (!shop) {
         return res.status(400).json({ error: "Missing required shop parameter" });
       }
@@ -1362,11 +1460,57 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
         slotLabels: slotLabels || existingLabels,
         eligibleAddonVariantIds: eligibleAddonVariantIds || existingAddons,
         vipRedemptions: vipRedemptions || existingVipRedemptions,
+        promoType: promoType || allConfigs[shop]?.promoType || "MANUAL",
+        tenureThresholdMonths: tenureThresholdMonths !== undefined ? parseInt(tenureThresholdMonths) : (allConfigs[shop]?.tenureThresholdMonths !== undefined ? allConfigs[shop].tenureThresholdMonths : 6),
+        tenureBonusLimit: tenureBonusLimit !== undefined ? parseInt(tenureBonusLimit) : (allConfigs[shop]?.tenureBonusLimit !== undefined ? allConfigs[shop].tenureBonusLimit : 1),
+        campaignName: campaignName || allConfigs[shop]?.campaignName || "Black Friday Glow-Up",
+        campaignStartDate: campaignStartDate || allConfigs[shop]?.campaignStartDate || new Date().toISOString().split("T")[0],
+        campaignEndDate: campaignEndDate || allConfigs[shop]?.campaignEndDate || new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
+        campaignBonusLimit: campaignBonusLimit !== undefined ? parseInt(campaignBonusLimit) : (allConfigs[shop]?.campaignBonusLimit !== undefined ? allConfigs[shop].campaignBonusLimit : 2),
         discountProfiles: discountProfiles || existingProfiles
       };
 
       fs.writeFileSync(configPath, JSON.stringify(allConfigs, null, 2), "utf-8");
       res.json({ success: true, themeConfig: allConfigs[shop] });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // POST /api/admin/subscriptions/inject-gift (Merchant directly injects a surprise targeted gift into a customer box)
+  app.post("/api/admin/subscriptions/inject-gift", checkSession(), async (req, res) => {
+    try {
+      const { contractId, variantId, giftName } = req.body;
+      if (!contractId || !variantId) {
+        return res.status(400).json({ error: "Missing required contractId or variantId parameters" });
+      }
+
+      const contract = await prisma.subscriptionContract.findUnique({ where: { id: contractId } });
+      if (!contract) {
+        return res.status(404).json({ error: "Subscription contract not found" });
+      }
+
+      let items = [];
+      try {
+        items = typeof contract.items === "string" ? JSON.parse(contract.items) : contract.items;
+      } catch (e) {}
+
+      // Inject surprise free gift
+      items.push({
+        variantId,
+        productName: (giftName || "Surprise Reward") + " (Surprise Gift)",
+        price: 0.00,
+        quantity: 1,
+        isFreeGift: true
+      });
+
+      const updated = await prisma.subscriptionContract.update({
+        where: { id: contractId },
+        data: { items: JSON.stringify(items) }
+      });
+
+      console.log(`[Admin Targeted Gifting] Injected gift ${giftName} into contract ${contractId}`);
+      res.json({ success: true, contract: updated });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -1554,7 +1698,13 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
       let profile = authenticatedProfile;
       if (!profile && customerId) {
         profile = await prisma.customerProfile.findFirst({
-          where: { customerId: customerId as string, shop }
+          where: { customerId: customerId as string, shop },
+          include: { subscription: true }
+        });
+      } else if (profile) {
+        profile = await prisma.customerProfile.findFirst({
+          where: { id: profile.id },
+          include: { subscription: true }
         });
       }
 
@@ -1636,6 +1786,7 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
       const configPath = path.resolve("./theme-settings.json");
       let themePrimaryColor = "#b89047"; // premium luxury gold by default
       let themeSecondaryColor = "#1a365d"; // premium deep navy by default
+      let maxAddonLimit = 1; // default limit of 1 add-on per subscriber
       let minStartDateDays = 2; // default 2 days min from checkout
       let slotLabels = ["Cleanse 🧴", "Treat 🔮", "Restore ❄️"]; // premium skincare visual steps guides by default
       let eligibleAddonVariantIds = shopifyProducts.map(p => p.variantId);
@@ -1654,13 +1805,17 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
         }
       ];
 
+      let allConfigs: any = {};
       if (fs.existsSync(configPath)) {
         try {
           const raw = fs.readFileSync(configPath, "utf-8");
-          const allConfigs = JSON.parse(raw);
+          allConfigs = JSON.parse(raw);
           if (allConfigs[shop]) {
             themePrimaryColor = allConfigs[shop].themePrimaryColor || themePrimaryColor;
             themeSecondaryColor = allConfigs[shop].themeSecondaryColor || themeSecondaryColor;
+            if (allConfigs[shop].maxAddonLimit !== undefined) {
+              maxAddonLimit = parseInt(allConfigs[shop].maxAddonLimit);
+            }
             if (allConfigs[shop].minStartDateDays !== undefined) {
               minStartDateDays = parseInt(allConfigs[shop].minStartDateDays);
             }
@@ -2243,11 +2398,35 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
       // Cancellation Interception Save Flow state
       const [showCancellationSaveFlow, setShowCancellationSaveFlow] = React.useState(false);
       
+      let dynamicMaxLimit = maxAddonLimit;
+      if (profile) {
+        const type = allConfigs && allConfigs[shop] ? allConfigs[shop].promoType : "MANUAL";
+        if (type === "TENURE") {
+          const tenure = profile.subscription?.tenureMonths || 1;
+          const threshold = allConfigs && allConfigs[shop] ? parseInt(allConfigs[shop].tenureThresholdMonths || "6") : 6;
+          const bonus = allConfigs && allConfigs[shop] ? parseInt(allConfigs[shop].tenureBonusLimit || "1") : 1;
+          if (tenure >= threshold) {
+            dynamicMaxLimit = maxAddonLimit + bonus;
+          }
+        } else if (type === "CAMPAIGN") {
+          const startStr = allConfigs && allConfigs[shop] ? allConfigs[shop].campaignStartDate : "";
+          const endStr = allConfigs && allConfigs[shop] ? allConfigs[shop].campaignEndDate : "";
+          const start = new Date(startStr || "");
+          const end = new Date(endStr || "");
+          const now = new Date();
+          if (!isNaN(start.getTime()) && !isNaN(end.getTime()) && now >= start && now <= end) {
+            const bonus = allConfigs && allConfigs[shop] ? parseInt(allConfigs[shop].campaignBonusLimit || "2") : 2;
+            dynamicMaxLimit = maxAddonLimit + bonus;
+          }
+        }
+      }
+
       const milestoneCount = ${milestoneCount};
       const eligibleGifts = ${JSON.stringify(giftIds)};
       const discountProfiles = ${JSON.stringify(discountProfiles)};
       const eligibleAddons = ${JSON.stringify(eligibleAddonVariantIds)};
       const vipRedemptions = ${JSON.stringify(vipRedemptions)};
+      const maxAddonLimit = dynamicMaxLimit;
 
       const [selectedGiftId, setSelectedGiftId] = React.useState("");
       const [claimingGift, setClaimingGift] = React.useState(false);
@@ -3469,9 +3648,6 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
               e("div", { className: "grid" },
                 e("button", { className: "btn-secondary", onClick: () => { if (contract.status === "ACTIVE") setShowCancellationSaveFlow(true); else togglePause(); } }, contract.status === "PAUSED" ? "▶️ Resume" : "⏸️ Pause Routine"),
                 e("button", { className: "btn-secondary", onClick: () => setFrequency(45) }, "⚙️ Set 45d Delivery")
-              ),
-              e("div", { className: "grid" },
-                e("button", { className: "btn-primary", onClick: addDynamicAddOn }, "🛍️ + Personalized Add-on")
               )
             )
           ),
@@ -3657,6 +3833,23 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
                     );
                   }
                 })
+              ),
+
+              e("div", { style: { marginTop: "12px", padding: "0 10px" } },
+                e("button", {
+                  className: "btn-primary",
+                  disabled: addonVariants.length >= maxAddonLimit,
+                  onClick: addDynamicAddOn,
+                  style: {
+                    width: "100%",
+                    padding: "10px",
+                    fontSize: "12px",
+                    background: addonVariants.length >= maxAddonLimit ? "#e2e8f0" : "var(--primary-color)",
+                    borderColor: addonVariants.length >= maxAddonLimit ? "#cbd5e0" : "var(--primary-color)",
+                    color: addonVariants.length >= maxAddonLimit ? "#a0aec0" : "white",
+                    cursor: addonVariants.length >= maxAddonLimit ? "not-allowed" : "pointer"
+                  }
+                }, addonVariants.length >= maxAddonLimit ? "🛍️ Add-on Limit Reached (" + maxAddonLimit + ")" : "🛍️ + Personalized AI Add-on")
               )
             ),
 
@@ -5313,6 +5506,13 @@ app.get("/", (req, res) => {
       const [adminAddons, setAdminAddons] = React.useState([]);
       const [adminDiscountProfiles, setAdminDiscountProfiles] = React.useState([]);
       const [adminVipRedemptions, setAdminVipRedemptions] = React.useState([]);
+      const [adminPromoType, setAdminPromoType] = React.useState("MANUAL");
+      const [adminTenureThreshold, setAdminTenureThreshold] = React.useState("6");
+      const [adminTenureBonus, setAdminTenureBonus] = React.useState("1");
+      const [adminCampaignName, setAdminCampaignName] = React.useState("Black Friday Glow-Up");
+      const [adminCampaignStart, setAdminCampaignStart] = React.useState(new Date().toISOString().split("T")[0]);
+      const [adminCampaignEnd, setAdminCampaignEnd] = React.useState(new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split("T")[0]);
+      const [adminCampaignBonus, setAdminCampaignBonus] = React.useState("2");
 
       const handleVipToggle = (variantId) => {
         const existing = adminVipRedemptions.find(x => x.variantId === variantId);
@@ -5686,6 +5886,13 @@ app.get("/", (req, res) => {
             if (data.slotLabels !== undefined) setAdminSlotLabels(data.slotLabels);
             if (data.eligibleAddonVariantIds !== undefined) setAdminAddons(data.eligibleAddonVariantIds);
             if (data.vipRedemptions !== undefined) setAdminVipRedemptions(data.vipRedemptions);
+            if (data.promoType !== undefined) setAdminPromoType(data.promoType);
+            if (data.tenureThresholdMonths !== undefined) setAdminTenureThreshold(data.tenureThresholdMonths.toString());
+            if (data.tenureBonusLimit !== undefined) setAdminTenureBonus(data.tenureBonusLimit.toString());
+            if (data.campaignName !== undefined) setAdminCampaignName(data.campaignName);
+            if (data.campaignStartDate !== undefined) setAdminCampaignStart(data.campaignStartDate);
+            if (data.campaignEndDate !== undefined) setAdminCampaignEnd(data.campaignEndDate);
+            if (data.campaignBonusLimit !== undefined) setAdminCampaignBonus(data.campaignBonusLimit.toString());
             if (data.discountProfiles !== undefined) setAdminDiscountProfiles(data.discountProfiles);
           })
           .catch(() => {});
@@ -5712,6 +5919,13 @@ app.get("/", (req, res) => {
             slotLabels: adminSlotLabels,
             eligibleAddonVariantIds: addons,
             vipRedemptions: adminVipRedemptions,
+            promoType: adminPromoType,
+            tenureThresholdMonths: parseInt(adminTenureThreshold || "6"),
+            tenureBonusLimit: parseInt(adminTenureBonus || "1"),
+            campaignName: adminCampaignName,
+            campaignStartDate: adminCampaignStart,
+            campaignEndDate: adminCampaignEnd,
+            campaignBonusLimit: parseInt(adminCampaignBonus || "2"),
             discountProfiles: profiles
           })
         })
@@ -5737,6 +5951,27 @@ app.get("/", (req, res) => {
               }
               if (data.themeConfig.vipRedemptions !== undefined) {
                 setAdminVipRedemptions(data.themeConfig.vipRedemptions);
+              }
+              if (data.themeConfig.promoType !== undefined) {
+                setAdminPromoType(data.themeConfig.promoType);
+              }
+              if (data.themeConfig.tenureThresholdMonths !== undefined) {
+                setAdminTenureThreshold(data.themeConfig.tenureThresholdMonths.toString());
+              }
+              if (data.themeConfig.tenureBonusLimit !== undefined) {
+                setAdminTenureBonus(data.themeConfig.tenureBonusLimit.toString());
+              }
+              if (data.themeConfig.campaignName !== undefined) {
+                setAdminCampaignName(data.themeConfig.campaignName);
+              }
+              if (data.themeConfig.campaignStartDate !== undefined) {
+                setAdminCampaignStart(data.themeConfig.campaignStartDate);
+              }
+              if (data.themeConfig.campaignEndDate !== undefined) {
+                setAdminCampaignEnd(data.themeConfig.campaignEndDate);
+              }
+              if (data.themeConfig.campaignBonusLimit !== undefined) {
+                setAdminCampaignBonus(data.themeConfig.campaignBonusLimit.toString());
               }
               if (data.themeConfig.discountProfiles !== undefined) {
                 setAdminDiscountProfiles(data.themeConfig.discountProfiles);
@@ -7029,6 +7264,94 @@ app.get("/", (req, res) => {
                   onChange: (ev) => setAdminMinStartDateDays(ev.target.value), 
                   style: { width: "100%", padding: "10px", borderRadius: "6px", border: "1px solid #cbd5e0", fontSize: "13px", outline: "none", boxSizing: "border-box" } 
                 })
+              )
+            ),
+
+            // Exposing Promotional Campaigns & Dynamic Gating Rules configurator
+            e("div", { style: { borderTop: "1px solid #cbd5e0", paddingTop: "16px", marginBottom: "20px" } },
+              e("h4", { style: { fontSize: "14px", fontWeight: "600", color: "#2c3e50", marginBottom: "8px" } }, "✨ Configure Promotional Campaigns & Dynamic Gating Rules"),
+              e("p", { style: { color: "#6d7175", fontSize: "12px", marginBottom: "12px" } }, "Supercharge customer loyalty! Choose how to run box promotions and dynamically adjust maximum subscriber add-on limits."),
+              
+              e("div", { style: { display: "flex", gap: "16px", flexWrap: "wrap", marginBottom: "12px", alignItems: "center" } },
+                e("div", { style: { minWidth: "240px", flex: 1 } },
+                  e("label", { style: { display: "block", fontSize: "11px", fontWeight: "bold", color: "#4a5568", marginBottom: "6px" } }, "Active Promo Mode"),
+                  e("select", {
+                    value: adminPromoType,
+                    onChange: (ev) => setAdminPromoType(ev.target.value),
+                    style: { width: "100%", padding: "10px", borderRadius: "6px", border: "1px solid #cbd5e0", fontSize: "13px", outline: "none", cursor: "pointer", background: "white" }
+                  },
+                    e("option", { value: "MANUAL" }, "Manual Shop-Wide Limits (No Campaign)"),
+                    e("option", { value: "TENURE" }, "Loyalty Tenure-Based Unlocks (Reward Long-Term Subscribers)"),
+                    e("option", { value: "CAMPAIGN" }, "Automated Campaign Flash Events (Black Friday / Holidays)")
+                  )
+                )
+              ),
+
+              adminPromoType === "TENURE" && e("div", { style: { background: "#f7fafc", border: "1px solid #e2e8f0", padding: "12px", borderRadius: "6px", display: "flex", gap: "16px", flexWrap: "wrap", marginBottom: "12px" } },
+                e("div", { style: { minWidth: "160px", flex: 1 } },
+                  e("label", { style: { display: "block", fontSize: "11px", fontWeight: "bold", color: "#4a5568", marginBottom: "6px" } }, "Loyalty Tenure Threshold (Months)"),
+                  e("input", {
+                    type: "number",
+                    min: "1",
+                    value: adminTenureThreshold,
+                    onChange: (ev) => setAdminTenureThreshold(ev.target.value),
+                    style: { width: "100%", padding: "8px", borderRadius: "4px", border: "1px solid #cbd5e0", fontSize: "12px" }
+                  })
+                ),
+                e("div", { style: { minWidth: "160px", flex: 1 } },
+                  e("label", { style: { display: "block", fontSize: "11px", fontWeight: "bold", color: "#4a5568", marginBottom: "6px" } }, "Bonus Add-on Slots Granted"),
+                  e("input", {
+                    type: "number",
+                    min: "1",
+                    value: adminTenureBonus,
+                    onChange: (ev) => setAdminTenureBonus(ev.target.value),
+                    style: { width: "100%", padding: "8px", borderRadius: "4px", border: "1px solid #cbd5e0", fontSize: "12px" }
+                  })
+                )
+              ),
+
+              adminPromoType === "CAMPAIGN" && e("div", { style: { background: "#fffaf0", border: "1px solid #feebc8", padding: "12px", borderRadius: "6px", display: "flex", flexDirection: "column", gap: "12px", marginBottom: "12px" } },
+                e("div", { style: { display: "flex", gap: "16px", flexWrap: "wrap" } },
+                  e("div", { style: { minWidth: "200px", flex: 1.5 } },
+                    e("label", { style: { display: "block", fontSize: "11px", fontWeight: "bold", color: "#4a5568", marginBottom: "6px" } }, "Promo Campaign Name"),
+                    e("input", {
+                      type: "text",
+                      value: adminCampaignName,
+                      onChange: (ev) => setAdminCampaignName(ev.target.value),
+                      style: { width: "100%", padding: "8px", borderRadius: "4px", border: "1px solid #cbd5e0", fontSize: "12px", boxSizing: "border-box" }
+                    })
+                  ),
+                  e("div", { style: { minWidth: "120px", flex: 0.8 } },
+                    e("label", { style: { display: "block", fontSize: "11px", fontWeight: "bold", color: "#4a5568", marginBottom: "6px" } }, "Campaign Bonus Slots"),
+                    e("input", {
+                      type: "number",
+                      min: "1",
+                      value: adminCampaignBonus,
+                      onChange: (ev) => setAdminCampaignBonus(ev.target.value),
+                      style: { width: "100%", padding: "8px", borderRadius: "4px", border: "1px solid #cbd5e0", fontSize: "12px" }
+                    })
+                  )
+                ),
+                e("div", { style: { display: "flex", gap: "16px", flexWrap: "wrap" } },
+                  e("div", { style: { minWidth: "160px", flex: 1 } },
+                    e("label", { style: { display: "block", fontSize: "11px", fontWeight: "bold", color: "#4a5568", marginBottom: "6px" } }, "Campaign Start Date"),
+                    e("input", {
+                      type: "date",
+                      value: adminCampaignStart,
+                      onChange: (ev) => setAdminCampaignStart(ev.target.value),
+                      style: { width: "100%", padding: "8px", borderRadius: "4px", border: "1px solid #cbd5e0", fontSize: "12px", boxSizing: "border-box" }
+                    })
+                  ),
+                  e("div", { style: { minWidth: "160px", flex: 1 } },
+                    e("label", { style: { display: "block", fontSize: "11px", fontWeight: "bold", color: "#4a5568", marginBottom: "6px" } }, "Campaign End Date"),
+                    e("input", {
+                      type: "date",
+                      value: adminCampaignEnd,
+                      onChange: (ev) => setAdminCampaignEnd(ev.target.value),
+                      style: { width: "100%", padding: "8px", borderRadius: "4px", border: "1px solid #cbd5e0", fontSize: "12px", boxSizing: "border-box" }
+                    })
+                  )
+                )
               )
             ),
 
