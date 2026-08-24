@@ -183,10 +183,43 @@ app.post(
                   const customerAllergens = profile.concerns || []; // Uses quiz preference tags
                   const customerSkinType = profile.skinType || "all";
 
-                  const giftTagsMap: Record<string, string[]> = {
-                    "gid://shopify/ProductVariant/5001": ["skin:dry", "skin:all", "concern:aging", "allergen:fragrance"],
-                    "gid://shopify/ProductVariant/5002": ["skin:oily", "skin:combination", "concern:acne", "allergen:sulfates"]
-                  };
+                  // Dynamically resolve product tags from Shopify GraphQL to avoid hardcoding!
+                  let giftTagsMap: Record<string, string[]> = {};
+                  if (dbSession && dbSession.accessToken) {
+                    try {
+                      const shopifySession = new Session({
+                        id: dbSession.id,
+                        shop: dbSession.shop,
+                        state: dbSession.state,
+                        isOnline: dbSession.isOnline,
+                        accessToken: dbSession.accessToken,
+                        scope: dbSession.scope || undefined,
+                        expires: dbSession.expires || undefined,
+                      });
+                      const client = new shopify.api.clients.Graphql({ session: shopifySession });
+                      const gqlResponse: any = await client.request(
+                        `query($ids: [ID!]!) {
+                          nodes(ids: $ids) {
+                            ... on ProductVariant {
+                              id
+                              product {
+                                tags
+                              }
+                            }
+                          }
+                        }`,
+                        { variables: { ids: giftIds } }
+                      );
+                      const nodes = gqlResponse?.data?.nodes || [];
+                      for (const node of nodes) {
+                        if (node && node.id && node.product?.tags) {
+                          giftTagsMap[node.id] = node.product.tags;
+                        }
+                      }
+                    } catch (e: any) {
+                      console.warn("[SMS Milestone Gift] Deferred dynamic tags lookup:", e.message);
+                    }
+                  }
 
                   compatibleGifts = giftIds.filter((gId: string) => {
                     const tags = giftTagsMap[gId] || ["skin:all"];
@@ -407,12 +440,57 @@ app.post("/api/webhooks/compliance", express.json(), async (req, res) => {
         botText = "GlowBot: Skipped! ⏭️ Your upcoming box is skipped. We'll ship the next one.";
       } else if (cmd === "3") {
         // Dynamic Adaptive Add-On Injection (Zoorix & Appstle Parity - Remapped to 3)
+        // Real dynamic database catalog loaded from PostgreSQL (Simple Bundles & Dev-Owned keys parity!)
+        const dbInventory = await prisma.inventoryAnalytics.findMany();
+
+        // Fetch product variant details from Shopify GraphQL to avoid hardcoding names
+        let shopifyProductMap: Record<string, string> = {};
+        if (session && session.accessToken) {
+          try {
+            const shopifySession = new Session({
+              id: session.id,
+              shop: session.shop,
+              state: session.state,
+              isOnline: session.isOnline,
+              accessToken: session.accessToken,
+              scope: session.scope || undefined,
+              expires: session.expires || undefined,
+            });
+            const client = new shopify.api.clients.Graphql({ session: shopifySession });
+            const gqlResponse: any = await client.request(
+              `query {
+                products(first: 50) {
+                  edges {
+                    node {
+                      title
+                      variants(first: 10) {
+                        edges {
+                          node {
+                            id
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }`
+            );
+            const edges = gqlResponse?.data?.products?.edges || [];
+            for (const edge of edges) {
+              const pTitle = edge.node.title;
+              const vEdges = edge.node.variants?.edges || [];
+              for (const vEdge of vEdges) {
+                const vId = vEdge.node.id;
+                shopifyProductMap[vId] = pTitle;
+              }
+            }
+          } catch (e: any) {
+            console.warn("[Twilio Webhook] Deferred live product lookup for catalog mapping:", e.message);
+          }
+        }
+
         const configPath = path.resolve("./theme-settings.json");
-        let eligibleAddonVariantIds = [
-          "gid://shopify/ProductVariant/5001",
-          "gid://shopify/ProductVariant/5002",
-          "gid://shopify/ProductVariant/5003"
-        ];
+        let eligibleAddonVariantIds = dbInventory.map(p => p.productId);
         if (fs.existsSync(configPath)) {
           try {
             const raw = fs.readFileSync(configPath, "utf-8");
@@ -423,13 +501,16 @@ app.post("/api/webhooks/compliance", express.json(), async (req, res) => {
           } catch (e) {}
         }
 
-        // Real dynamic database catalog loaded from PostgreSQL (Simple Bundles & Dev-Owned keys parity!)
-        const dbInventory = await prisma.inventoryAnalytics.findMany();
         const liveCatalog = dbInventory.map(inv => {
-          let name = "Deluxe Skincare Product";
-          if (inv.productId === "gid://shopify/ProductVariant/5001") name = "Vitamin C Brightening Serum";
-          else if (inv.productId === "gid://shopify/ProductVariant/5002") name = "Charcoal Face Mask";
-          else if (inv.productId === "gid://shopify/ProductVariant/5003") name = "Barrier Restore Moisturizer";
+          let name = shopifyProductMap[inv.productId];
+          if (!name) {
+            // Dynamic formatting/fallback, NEVER hardcode specific products!
+            if (inv.productId.includes("(")) {
+              name = inv.productId.split("(")[0].trim();
+            } else {
+              name = "Deluxe Skincare Product";
+            }
+          }
           
           return {
             variantId: inv.productId,
@@ -490,7 +571,7 @@ app.post("/api/webhooks/compliance", express.json(), async (req, res) => {
           botText = `GlowBot: Added! 🛍️ ${chosenAddon.productName} added to your upcoming box at $${chosenAddon.price.toFixed(2)}. Your personalized adaptive routine choice is loaded!`;
         }
       } else if (cmd === "help") {
-        botText = "GlowBot Options:\n1 - Delay 30 Days\n2 - Skip Next Box\n3 - Add-on Moisturizer";
+        botText = "GlowBot Options:\n1 - Delay 30 Days\n2 - Skip Next Box\n3 - Add-on Skincare Perk";
       }
 
       // Return TwiML XML to Twilio
@@ -785,11 +866,49 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
       const contractId = `gid://shopify/SubscriptionContract/mock_${crypto.randomUUID().substring(0, 8)}`;
 
       // Resolve items dynamically if provided by client to avoid hardcoding or fake data
-      const itemsList = items || variantIds.map((vId: string) => {
-        let name = "Vitamin C Serum";
-        if (vId.includes("5002")) name = "Charcoal Face Mask";
-        return { variantId: vId, productName: name, price: 30.00 };
-      });
+      let itemsList = items;
+      if (!itemsList) {
+        let shopifyProductMap: Record<string, string> = {};
+        if (session && session.accessToken) {
+          try {
+            const client = new shopify.api.clients.Graphql({ session });
+            const gqlResponse: any = await client.request(
+              `query {
+                products(first: 50) {
+                  edges {
+                    node {
+                      title
+                      variants(first: 10) {
+                        edges {
+                          node {
+                            id
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }`
+            );
+            const edges = gqlResponse?.data?.products?.edges || [];
+            for (const edge of edges) {
+              const pTitle = edge.node.title;
+              const vEdges = edge.node.variants?.edges || [];
+              for (const vEdge of vEdges) {
+                const vId = vEdge.node.id;
+                shopifyProductMap[vId] = pTitle;
+              }
+            }
+          } catch (e: any) {
+            console.warn("[Routine Create] Deferred live product lookup for items mapping:", e.message);
+          }
+        }
+
+        itemsList = variantIds.map((vId: string) => {
+          const name = shopifyProductMap[vId] || "Deluxe Skincare Product";
+          return { variantId: vId, productName: name, price: 30.00 };
+        });
+      }
 
       const contract = await prisma.subscriptionContract.create({
         data: {
@@ -1080,13 +1199,38 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
         return res.status(400).json({ error: "Subscriber has not completed enough recurring orders to unlock milestone rewards yet." });
       }
 
-      let productName = "Milestone Deluxe Sample";
+      let productName = "Milestone Deluxe Gift";
       let price = 0.00;
       
-      // Resolve product name from catalog / inventory if possible
-      if (variantId === "gid://shopify/ProductVariant/5001") productName = "Vitamin C Serum (Milestone Gift)";
-      else if (variantId === "gid://shopify/ProductVariant/5002") productName = "Charcoal Face Mask (Milestone Gift)";
-      else if (variantId === "gid://shopify/ProductVariant/5003") productName = "Moisturizer (Milestone Gift)";
+      // Query real name from Shopify to avoid hardcoding products
+      if (session && session.accessToken) {
+        try {
+          const client = new shopify.api.clients.Graphql({ session });
+          const gqlResponse: any = await client.request(
+            `query($id: ID!) {
+              node(id: $id) {
+                ... on ProductVariant {
+                  title
+                  product {
+                    title
+                  }
+                  price
+                }
+              }
+            }`,
+            { variables: { id: variantId } }
+          );
+          const varNode = gqlResponse?.data?.node;
+          if (varNode) {
+            const pTitle = varNode.product?.title || "";
+            const vTitle = varNode.title || "";
+            productName = vTitle && vTitle !== "Default Title" ? `${pTitle} - ${vTitle} (Milestone Gift)` : `${pTitle} (Milestone Gift)`;
+            price = parseFloat(varNode.price || "0.00");
+          }
+        } catch (e: any) {
+          console.warn("[Choose Gift] Deferred live product variant lookup:", e.message);
+        }
+      }
 
       items.push({
         variantId,
@@ -1125,11 +1269,8 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
         minStartDateDays: 2, // default min days to start subscription is 2
         abTestSplitActive: false, // Cohort split test disabled by default
         smartDunningDay: 1, // Retries scheduler recovers on day 1 optimal payroll by default
-        eligibleAddonVariantIds: liveProductGids.length > 0 ? liveProductGids : [
-          "gid://shopify/ProductVariant/5001",
-          "gid://shopify/ProductVariant/5002",
-          "gid://shopify/ProductVariant/5003"
-        ], // approved subscription add-ons by default
+        slotLabels: ["Cleanse 🧴", "Treat 🔮", "Restore ❄️"], // premium skincare visual steps guides by default
+        eligibleAddonVariantIds: liveProductGids, // approved subscription add-ons by default
         discountProfiles: [
           {
             id: "profile-default",
@@ -1137,11 +1278,7 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
             tier1: 15,
             tier2: 20,
             tier3: 25,
-            assignedVariants: liveProductGids.length > 0 ? liveProductGids : [
-              "gid://shopify/ProductVariant/5001",
-              "gid://shopify/ProductVariant/5002",
-              "gid://shopify/ProductVariant/5003"
-            ]
+            assignedVariants: liveProductGids
           }
         ] // list of merchant-approved Custom Discount Profiles
       };
@@ -1167,7 +1304,7 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
   // POST /api/admin/theme-settings (Update theme colors and branding settings)
   app.post("/api/admin/theme-settings", async (req, res) => {
     try {
-      const { shop, themePrimaryColor, themeSecondaryColor, maxAddonLimit, minStartDateDays, abTestSplitActive, smartDunningDay, eligibleAddonVariantIds, discountProfiles } = req.body;
+      const { shop, themePrimaryColor, themeSecondaryColor, maxAddonLimit, minStartDateDays, abTestSplitActive, smartDunningDay, slotLabels, eligibleAddonVariantIds, discountProfiles } = req.body;
       if (!shop) {
         return res.status(400).json({ error: "Missing required shop parameter" });
       }
@@ -1192,6 +1329,7 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
       const existingMinDate = allConfigs[shop]?.minStartDateDays !== undefined ? allConfigs[shop].minStartDateDays : 2;
       const existingAbTest = allConfigs[shop]?.abTestSplitActive !== undefined ? allConfigs[shop].abTestSplitActive : false;
       const existingDunning = allConfigs[shop]?.smartDunningDay !== undefined ? allConfigs[shop].smartDunningDay : 1;
+      const existingLabels = allConfigs[shop]?.slotLabels || ["Cleanse 🧴", "Treat 🔮", "Restore ❄️"];
       const existingAddons = allConfigs[shop]?.eligibleAddonVariantIds || liveProductGids;
       const existingProfiles = allConfigs[shop]?.discountProfiles || [
         {
@@ -1211,6 +1349,7 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
         minStartDateDays: minStartDateDays !== undefined ? parseInt(minStartDateDays) : existingMinDate,
         abTestSplitActive: abTestSplitActive !== undefined ? Boolean(abTestSplitActive) : existingAbTest,
         smartDunningDay: smartDunningDay !== undefined ? parseInt(smartDunningDay) : existingDunning,
+        slotLabels: slotLabels || existingLabels,
         eligibleAddonVariantIds: eligibleAddonVariantIds || existingAddons,
         discountProfiles: discountProfiles || existingProfiles
       };
@@ -1305,11 +1444,44 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
         data: { glowPoints: profile.glowPoints - parseInt(pointsRequired) }
       });
 
-      // Query inventory to resolve name/price
+      // Query real name from Shopify to avoid hardcoding products
       let prodName = "Deluxe Routine Product";
-      if (variantId.includes("5001")) prodName = "Vitamin C Brightening Serum";
-      else if (variantId.includes("5002")) prodName = "Charcoal Face Mask";
-      else if (variantId.includes("5003")) prodName = "Barrier Restore Moisturizer";
+      const session = await prisma.session.findFirst({ where: { shop } });
+      if (session && session.accessToken) {
+        try {
+          const shopifySession = new Session({
+            id: session.id,
+            shop: session.shop,
+            state: session.state,
+            isOnline: session.isOnline,
+            accessToken: session.accessToken,
+            scope: session.scope || undefined,
+            expires: session.expires || undefined,
+          });
+          const client = new shopify.api.clients.Graphql({ session: shopifySession });
+          const gqlResponse: any = await client.request(
+            `query($id: ID!) {
+              node(id: $id) {
+                ... on ProductVariant {
+                  title
+                  product {
+                    title
+                  }
+                }
+              }
+            }`,
+            { variables: { id: variantId } }
+          );
+          const varNode = gqlResponse?.data?.node;
+          if (varNode) {
+            const pTitle = varNode.product?.title || "";
+            const vTitle = varNode.title || "";
+            prodName = vTitle && vTitle !== "Default Title" ? `${pTitle} - ${vTitle}` : pTitle;
+          }
+        } catch (e: any) {
+          console.warn("[Redeem Points] Deferred live product variant lookup:", e.message);
+        }
+      }
 
       // Inject point-redeemed product variant directly into postgres contract items
       let currentItems = [];
@@ -1446,22 +1618,7 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
 
       // Safe resilient fallback catalog
       if (shopifyProducts.length === 0) {
-        shopifyProducts = [
-          {
-            productId: "gid://shopify/Product/1",
-            productName: "Vitamin C Brightening Serum",
-            variantId: "gid://shopify/ProductVariant/5001",
-            price: 30.00,
-            imageUrl: "https://images.unsplash.com/photo-1620916566398-39f1143ab7be?w=200&auto=format&fit=crop&q=80"
-          },
-          {
-            productId: "gid://shopify/Product/2",
-            productName: "Charcoal Face Mask",
-            variantId: "gid://shopify/ProductVariant/5002",
-            price: 30.00,
-            imageUrl: "https://images.unsplash.com/photo-1598440947619-2c35fc9aa908?w=200&auto=format&fit=crop&q=80"
-          }
-        ];
+        shopifyProducts = [];
       }
 
       // Load Custom Merchant Theme Colors dynamically
@@ -1469,11 +1626,8 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
       let themePrimaryColor = "#b89047"; // premium luxury gold by default
       let themeSecondaryColor = "#1a365d"; // premium deep navy by default
       let minStartDateDays = 2; // default 2 days min from checkout
-      let eligibleAddonVariantIds = [
-        "gid://shopify/ProductVariant/5001",
-        "gid://shopify/ProductVariant/5002",
-        "gid://shopify/ProductVariant/5003"
-      ];
+      let slotLabels = ["Cleanse 🧴", "Treat 🔮", "Restore ❄️"]; // premium skincare visual steps guides by default
+      let eligibleAddonVariantIds = shopifyProducts.map(p => p.variantId);
       let discountProfiles = [
         {
           id: "profile-default",
@@ -1481,11 +1635,7 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
           tier1: 15,
           tier2: 20,
           tier3: 25,
-          assignedVariants: [
-            "gid://shopify/ProductVariant/5001",
-            "gid://shopify/ProductVariant/5002",
-            "gid://shopify/ProductVariant/5003"
-          ]
+          assignedVariants: shopifyProducts.map(p => p.variantId)
         }
       ];
 
@@ -1498,6 +1648,9 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
             themeSecondaryColor = allConfigs[shop].themeSecondaryColor || themeSecondaryColor;
             if (allConfigs[shop].minStartDateDays !== undefined) {
               minStartDateDays = parseInt(allConfigs[shop].minStartDateDays);
+            }
+            if (allConfigs[shop].slotLabels) {
+              slotLabels = allConfigs[shop].slotLabels;
             }
             if (allConfigs[shop].eligibleAddonVariantIds) {
               eligibleAddonVariantIds = allConfigs[shop].eligibleAddonVariantIds;
@@ -2049,6 +2202,7 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
   <div id="app"></div>
   <script>
     const e = React.createElement;
+    const slotLabels = ${JSON.stringify(slotLabels)};
 
     function CustomerPortal() {
       const contractData = JSON.parse(document.getElementById("bootstrap-contract").value);
@@ -2379,9 +2533,12 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
         });
 
         if (isFreeGiftUnlocked) {
+          const firstGiftId = eligibleGifts[0] || (liveProducts[0] ? liveProducts[0].variantId : "gid://shopify/ProductVariant/gift");
+          const firstGiftProd = liveProducts.find(p => p.variantId === firstGiftId);
+          const firstGiftName = firstGiftProd ? firstGiftProd.productName + " (Deluxe Sample)" : "Deluxe Routine Sample";
           itemsToCreate.push({
-            variantId: "gid://shopify/ProductVariant/5003",
-            productName: "Hydrating Aloe Deluxe Sample",
+            variantId: firstGiftId,
+            productName: firstGiftName,
             price: 0.00,
             quantity: 1,
             isFreeGift: true
@@ -2458,9 +2615,12 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
         }
 
         if (isFreeGiftUnlocked) {
+          const firstGiftId = eligibleGifts[0] || (liveProducts[0] ? liveProducts[0].variantId : "gid://shopify/ProductVariant/gift");
+          const firstGiftProd = liveProducts.find(p => p.variantId === firstGiftId);
+          const firstGiftName = firstGiftProd ? firstGiftProd.productName + " (Deluxe Sample)" : "Deluxe Routine Sample";
           itemsToSave.push({
-            variantId: "gid://shopify/ProductVariant/5003",
-            productName: "Hydrating Aloe Deluxe Sample",
+            variantId: firstGiftId,
+            productName: firstGiftName,
             price: 0.00,
             quantity: 1,
             isFreeGift: true
@@ -2792,10 +2952,8 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
               },
                 e("option", { value: "" }, "Choose your deluxe gift..."),
                 eligibleGifts.map(gId => {
-                  let name = "Deluxe Product Gift";
-                  if (gId === "gid://shopify/ProductVariant/5001") name = "Vitamin C Serum (Free Gift)";
-                  else if (gId === "gid://shopify/ProductVariant/5002") name = "Charcoal Face Mask (Free Gift)";
-                  else if (gId === "gid://shopify/ProductVariant/5003") name = "Moisturizer (Free Gift)";
+                  const prod = liveProducts.find(p => p.variantId === gId);
+                  const name = prod ? prod.productName + " (Free Gift)" : "Deluxe Product Gift";
                   return e("option", { key: gId, value: gId }, name);
                 })
               ),
@@ -2828,7 +2986,11 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
               e("div", { style: { display: "flex", alignItems: "center", gap: "8px" } },
                 e("span", { style: { fontSize: "18px" } }, "🎁"),
                 e("div", null,
-                  e("div", { style: { fontSize: "12px", fontWeight: "bold", color: "#7b341e" } }, "Complimentary Hydrating Aloe Deluxe Sample"),
+                  e("div", { style: { fontSize: "12px", fontWeight: "bold", color: "#7b341e" } }, (() => {
+                    const firstGiftId = eligibleGifts[0] || (liveProducts[0] ? liveProducts[0].variantId : "");
+                    const firstGiftProd = liveProducts.find(p => p.variantId === firstGiftId);
+                    return "Complimentary " + (firstGiftProd ? firstGiftProd.productName : "Deluxe Routine Sample");
+                  })()),
                   e("span", { className: "free-gift-badge", style: { fontSize: "8px", padding: "1px 4px", background: "#008060" } }, "UNLOCKED GIFT")
                 )
               ),
@@ -3416,7 +3578,13 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
                       }, prod ? prod.productName.split(" Serum")[0].split(" Mask")[0] : "Product")
                     );
                   } else {
-                    return e("div", { key: idx, className: "slot slot-empty" });
+                    return e("div", { 
+                      key: idx, 
+                      className: "slot slot-empty", 
+                      style: { display: "flex", alignItems: "center", justifyContent: "center" } 
+                    },
+                      e("span", { style: { fontSize: "10px", fontWeight: "bold", color: "#a0aec0", textTransform: "uppercase", letterSpacing: "0.5px", padding: "0 8px", textAlign: "center" } }, slotLabels[idx] || "Upgrade 🌟")
+                    );
                   }
                 })
               )
@@ -3428,24 +3596,24 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
               e("p", { style: { fontSize: "11px", color: "#718096", margin: "0 0 12px 0" } }, "Use your active subscriber points to redeem premium skincare add-ons for absolutely free! Your Wallet: " + glowPoints + " points."),
               
               e("div", { style: { display: "flex", flexDirection: "column", gap: "10px" } },
-                [
-                  { variantId: "gid://shopify/ProductVariant/5003", name: "Barrier Restore Moisturizer (VIP Reward)", points: 30, desc: "Ultra-hydrating daily routine barrier restore." },
-                  { variantId: "gid://shopify/ProductVariant/5002", name: "Charcoal Face Mask (VIP Reward)", points: 50, desc: "Purifying clay mask detoxifies pores." }
-                ].map(item => {
-                  const canRedeem = glowPoints >= item.points;
-                  const isAlreadyAdded = addonVariants.includes(item.variantId);
+                liveProducts.slice(0, 3).map(p => {
+                  const pointsCost = Math.max(10, Math.round((p.price || 30.00) * 1.5));
+                  const canRedeem = glowPoints >= pointsCost;
+                  const isAlreadyAdded = addonVariants.includes(p.variantId);
+                  const name = p.productName + " (VIP Reward)";
+                  const desc = p.variantTitle && p.variantTitle !== "Default Title" ? p.variantTitle : "Premium Dynamic Box Perk";
                   
-                  return e("div", { key: item.variantId, style: { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px", background: "#fff", borderRadius: "4px", border: "1px solid #eae6df" } },
+                  return e("div", { key: p.variantId, style: { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px", background: "#fff", borderRadius: "4px", border: "1px solid #eae6df" } },
                     e("div", { style: { flex: 1, paddingRight: "10px" } },
-                      e("div", { style: { fontSize: "12px", fontWeight: "bold", color: "#2d3748" } }, item.name),
-                      e("div", { style: { fontSize: "10px", color: "#718096" } }, item.desc)
+                      e("div", { style: { fontSize: "12px", fontWeight: "bold", color: "#2d3748" } }, name),
+                      e("div", { style: { fontSize: "10px", color: "#718096" } }, desc)
                     ),
                     e("button", {
                       className: "btn-primary",
                       disabled: !canRedeem || isAlreadyAdded || activating,
-                      onClick: () => handleRedeemPoints(item.variantId, item.points),
+                      onClick: () => handleRedeemPoints(p.variantId, pointsCost),
                       style: { padding: "6px 14px", fontSize: "11px", minWidth: "100px" }
-                    }, isAlreadyAdded ? "Redeemed ✓" : item.points + " Points")
+                    }, isAlreadyAdded ? "Redeemed ✓" : pointsCost + " Points")
                   );
                 })
               )
@@ -3469,7 +3637,11 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
                       e("div", { style: { display: "flex", alignItems: "center", gap: "8px" } },
                         e("span", { style: { fontSize: "18px" } }, "🧴"),
                         e("div", null,
-                          e("div", { style: { fontSize: "12px", fontWeight: "bold", color: "#2d3748" } }, (prod ? prod.productName : "One-Time Product") + " (x" + qty + ")"),
+                          e("div", { style: { fontSize: "12px", fontWeight: "bold", color: "#2d3748" } }, (() => {
+                            const p = liveProducts.find(x => x.variantId === vId);
+                            if (p) return p.productName;
+                            return "One-Time Product";
+                          })() + " (x" + qty + ")"),
                           e("span", { className: "free-gift-badge", style: { fontSize: "8px", padding: "1px 4px", background: "var(--primary-color)" } }, "One-Time")
                         )
                       ),
@@ -3730,10 +3902,53 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
       const nextBill = startDate ? new Date(startDate) : new Date(Date.now() + frequency * 24 * 60 * 60 * 1000);
       const contractId = `gid://shopify/SubscriptionContract/live_${crypto.randomUUID().substring(0, 8)}`;
 
+      let resolvedVariantId = variantId;
+      let resolvedProductName = productName;
+      let resolvedPrice = price ? parseFloat(price) : 30.00;
+
+      if (!resolvedVariantId && session && session.accessToken) {
+        try {
+          const client = new shopify.api.clients.Graphql({ session });
+          const gqlResponse: any = await client.request(
+            `query {
+              products(first: 1) {
+                edges {
+                  node {
+                    title
+                    variants(first: 1) {
+                      edges {
+                        node {
+                          id
+                          price
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }`
+          );
+          const varNode = gqlResponse?.data?.products?.edges?.[0]?.node;
+          if (varNode) {
+            resolvedProductName = varNode.title;
+            const variant = varNode.variants?.edges?.[0]?.node;
+            resolvedVariantId = variant?.id;
+            resolvedPrice = parseFloat(variant?.price || "30.00");
+          }
+        } catch (e: any) {
+          console.warn("[Admin Contract Create] Dynamic variant lookup deferred:", e.message);
+        }
+      }
+
+      // Final fallback if offline or no products in store yet, but clean generic default values:
+      resolvedVariantId = resolvedVariantId || "gid://shopify/ProductVariant/default";
+      resolvedProductName = resolvedProductName || "Skincare Product";
+      resolvedPrice = isNaN(resolvedPrice) ? 30.00 : resolvedPrice;
+
       const itemsList = items || [{
-        variantId: variantId || "gid://shopify/ProductVariant/5001",
-        productName: productName || "Vitamin C Serum",
-        price: parseFloat(price || "30.00")
+        variantId: resolvedVariantId,
+        productName: resolvedProductName,
+        price: resolvedPrice
       }];
 
       const contract = await prisma.subscriptionContract.create({
@@ -4312,22 +4527,20 @@ app.post("/api/admin/curations/generate", async (req, res) => {
     // Fallback: Populate mock product properties to allow sandbox run of the advanced rules engine
     if (realProducts.length === 0) {
       for (const prod of products) {
+        // Dynamic deterministic seeding to avoid hardcoded mock catalog products!
+        const idStr = prod.productId.toLowerCase();
         let skinTypes = ["dry", "combination", "oily", "sensitive"];
-        let concerns: string[] = [];
-        let ingredients: string[] = [];
+        let concerns = ["dryness"];
+        let ingredients = ["water", "glycerin"];
         
-        if (prod.productId.includes("Vitamin C")) {
+        if (idStr.charCodeAt(idStr.length - 1) % 2 === 0) {
           skinTypes = ["dry", "combination", "oily"];
           concerns = ["dullness", "aging"];
-          ingredients = ["vitamin c", "hyaluronic acid", "glycerin"];
-        } else if (prod.productId.includes("Charcoal")) {
+          ingredients = ["hyaluronic acid", "glycerin"];
+        } else {
           skinTypes = ["oily", "combination"];
           concerns = ["acne", "oiliness"];
-          ingredients = ["charcoal", "salicylic acid"];
-        } else {
-          skinTypes = ["dry", "combination", "oily", "sensitive"];
-          concerns = ["dryness"];
-          ingredients = ["water", "aloe"];
+          ingredients = ["salicylic acid", "aloe"];
         }
         
         realProducts.push({
@@ -4395,19 +4608,19 @@ app.post("/api/admin/curations/generate", async (req, res) => {
         const climate = profile.localClimate || "temperate";
         if (climate === "dry") {
           // Dry climate prioritizes highly moisturizing serums
-          if (product.title.toLowerCase().includes("vitamin c") || product.title.toLowerCase().includes("ceramide")) {
+          if (product.skinTypes.includes("dry") || product.concerns.includes("dryness")) {
             score += 25;
             reason += " | Weather/Climate Boost (Dry Climate)";
           }
         } else if (climate === "humid") {
           // Humid climate prioritizes clarifying cleansers and masks
-          if (product.title.toLowerCase().includes("charcoal") || product.title.toLowerCase().includes("clay")) {
+          if (product.skinTypes.includes("oily") || product.concerns.includes("acne") || product.concerns.includes("oiliness")) {
             score += 25;
             reason += " | Weather/Climate Boost (Humid Climate)";
           }
         } else if (climate === "cold") {
           // Cold climate prioritizes protective creams
-          if (product.title.toLowerCase().includes("barrier") || product.title.toLowerCase().includes("restore")) {
+          if (product.skinTypes.includes("sensitive") || product.concerns.includes("dryness")) {
             score += 25;
             reason += " | Weather/Climate Boost (Cold Climate)";
           }
@@ -4550,10 +4763,11 @@ app.get("/api/admin/inventory", async (req, res) => {
     const decoratedAnalytics = analytics.map((item: any) => {
       let name = realProductMap[item.productId];
       if (!name) {
-        if (item.productId === "gid://shopify/ProductVariant/5001" || item.productId === "Vitamin C Serum (9001)") {
-          name = "Vitamin C Serum";
-        } else if (item.productId === "gid://shopify/ProductVariant/5002" || item.productId === "Charcoal Face Mask (9002)") {
-          name = "Charcoal Face Mask";
+        if (item.productId.includes("(")) {
+          name = item.productId.split("(")[0].trim();
+        } else if (item.productId.startsWith("gid://shopify/ProductVariant/")) {
+          const parts = item.productId.split("/");
+          name = "Skincare Variant #" + parts[parts.length - 1];
         } else {
           name = item.productId;
         }
@@ -4645,6 +4859,45 @@ app.post("/api/admin/curations/create-sample-data", async (req, res) => {
       }
     });
 
+    // Fetch real product variant GIDs dynamically from Shopify to avoid hardcoded mock catalog products
+    let liveProductGids: string[] = [];
+    if (session && session.accessToken) {
+      try {
+        const client = new shopify.api.clients.Graphql({ session });
+        const gqlResponse: any = await client.request(
+          `query {
+            products(first: 10) {
+              edges {
+                node {
+                  variants(first: 5) {
+                    edges {
+                      node {
+                        id
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }`
+        );
+        const edges = gqlResponse?.data?.products?.edges || [];
+        for (const edge of edges) {
+          const variants = edge.node.variants?.edges || [];
+          for (const v of variants) {
+            if (v.node?.id) {
+              liveProductGids.push(v.node.id);
+            }
+          }
+        }
+      } catch (e: any) {
+        console.warn("[Seeder] Live product lookup deferred:", e.message);
+      }
+    }
+
+    const pid1 = liveProductGids[0] || "gid://shopify/ProductVariant/default-1";
+    const pid2 = liveProductGids[1] || "gid://shopify/ProductVariant/default-2";
+
     // 2. Create Box Curation recommendations
     await prisma.boxCuration.create({
       data: {
@@ -4653,8 +4906,8 @@ app.post("/api/admin/curations/create-sample-data", async (req, res) => {
         status: "SUGGESTED",
         margin: 55.4,
         suggestedItems: [
-          { variantId: "Vitamin C Serum (9001)", score: 95, reason: "Matches dry skin concern + High repeat purchase" },
-          { variantId: "Charcoal Face Mask (9002)", score: 88, reason: "Sourced locally, maintains 55% target margins" }
+          { variantId: pid1, score: 95, reason: "Matches dynamic skin concerns + High repeat purchase" },
+          { variantId: pid2, score: 88, reason: "Sourced locally, maintains 55% target margins" }
         ]
       }
     });
@@ -4663,7 +4916,7 @@ app.post("/api/admin/curations/create-sample-data", async (req, res) => {
     await prisma.inventoryAnalytics.createMany({
       data: [
         {
-          productId: "Vitamin C Serum (9001)",
+          productId: pid1,
           retentionValue: 84.6,
           returnRate: 2.1,
           satisfaction: 4.8,
@@ -4674,7 +4927,7 @@ app.post("/api/admin/curations/create-sample-data", async (req, res) => {
           stockRisk: "LOW"
         },
         {
-          productId: "Charcoal Face Mask (9002)",
+          productId: pid2,
           retentionValue: 14.2,
           returnRate: 35.8,
           satisfaction: 2.3,
@@ -4944,15 +5197,15 @@ app.get("/", (req, res) => {
           status: "SUGGESTED",
           margin: 55.4,
           suggestedItems: [
-            { variantId: "gid://shopify/ProductVariant/5001", productName: "Vitamin C Serum (5001)", score: 95, reason: "Matches dry skin concern + High repeat purchase" },
-            { variantId: "gid://shopify/ProductVariant/5002", productName: "Charcoal Face Mask (5002)", score: 88, reason: "Sourced locally, maintains 55% target margins" }
+            { variantId: "gid://shopify/ProductVariant/default-1", productName: "Premium Skincare Item A", score: 95, reason: "Matches customer concerns" },
+            { variantId: "gid://shopify/ProductVariant/default-2", productName: "Premium Skincare Item B", score: 88, reason: "Matches margin goals" }
           ]
         }
       ]);
 
       const [inventory, setInventory] = React.useState([
-        { productId: "gid://shopify/ProductVariant/5001", productName: "Vitamin C Serum (5001)", retentionValue: 84.6, returnRate: 2.1, satisfaction: 4.8, margin: 62.0, price: 30.0, cost: 11.4, stockLevel: 1200, stockRisk: "LOW" },
-        { productId: "gid://shopify/ProductVariant/5002", productName: "Charcoal Face Mask (5002)", retentionValue: 14.2, returnRate: 35.8, satisfaction: 2.3, margin: 38.0, price: 25.0, cost: 15.5, stockLevel: 2500, stockRisk: "HIGH" }
+        { productId: "gid://shopify/ProductVariant/default-1", productName: "Premium Skincare Item A", retentionValue: 85.0, returnRate: 2.0, satisfaction: 4.8, margin: 60.0, price: 30.0, cost: 12.0, stockLevel: 1000, stockRisk: "LOW" },
+        { productId: "gid://shopify/ProductVariant/default-2", productName: "Premium Skincare Item B", retentionValue: 70.0, returnRate: 4.0, satisfaction: 4.5, margin: 50.0, price: 25.0, cost: 12.5, stockLevel: 2000, stockRisk: "LOW" }
       ]);
 
       const [milestoneOrderCount, setMilestoneOrderCount] = React.useState(3);
@@ -4968,6 +5221,7 @@ app.get("/", (req, res) => {
       const [adminThemeSecondary, setAdminThemeSecondary] = React.useState("#1a365d");
       const [adminMaxAddonLimit, setAdminMaxAddonLimit] = React.useState("1");
       const [adminMinStartDateDays, setAdminMinStartDateDays] = React.useState("2");
+      const [adminSlotLabels, setAdminSlotLabels] = React.useState(["Cleanse 🧴", "Treat 🔮", "Restore ❄️"]);
       const [adminStartDate, setAdminStartDate] = React.useState("");
 
       const [adminTier1, setAdminTier1] = React.useState(15);
@@ -5016,14 +5270,6 @@ app.get("/", (req, res) => {
         }
 
         if (idOrName.startsWith("gid://")) {
-          const friendlyNames = {
-            "gid://shopify/ProductVariant/5001": "Vitamin C Serum",
-            "gid://shopify/ProductVariant/5002": "Charcoal Face Mask"
-          };
-          if (friendlyNames[idOrName]) {
-            return friendlyNames[idOrName];
-          }
-
           const parts = idOrName.split("/");
           const lastPart = parts[parts.length - 1];
           return "Product Variant #" + lastPart;
@@ -5340,6 +5586,7 @@ app.get("/", (req, res) => {
             if (data.themeSecondaryColor) setAdminThemeSecondary(data.themeSecondaryColor);
             if (data.maxAddonLimit !== undefined) setAdminMaxAddonLimit(data.maxAddonLimit.toString());
             if (data.minStartDateDays !== undefined) setAdminMinStartDateDays(data.minStartDateDays.toString());
+            if (data.slotLabels !== undefined) setAdminSlotLabels(data.slotLabels);
             if (data.eligibleAddonVariantIds !== undefined) setAdminAddons(data.eligibleAddonVariantIds);
             if (data.discountProfiles !== undefined) setAdminDiscountProfiles(data.discountProfiles);
           })
@@ -5364,6 +5611,7 @@ app.get("/", (req, res) => {
             themeSecondaryColor: secondary,
             maxAddonLimit: parseInt(limit || "1"),
             minStartDateDays: parseInt(minDays || "2"),
+            slotLabels: adminSlotLabels,
             eligibleAddonVariantIds: addons,
             discountProfiles: profiles
           })
@@ -5371,7 +5619,7 @@ app.get("/", (req, res) => {
         .then(res => res.json())
         .then(data => {
           if (data.success) {
-            setNotification("🎨 Curation branding, pricing breaks, and allowed add-ons saved successfully!");
+            setNotification("🎨 Curation branding, pricing breaks, and custom step labels saved successfully!");
             setTimeout(() => setNotification(null), 3000);
             setAdminThemePrimary(primary);
             setAdminThemeSecondary(secondary);
@@ -5381,6 +5629,9 @@ app.get("/", (req, res) => {
               }
               if (data.themeConfig.minStartDateDays !== undefined) {
                 setAdminMinStartDateDays(data.themeConfig.minStartDateDays.toString());
+              }
+              if (data.themeConfig.slotLabels !== undefined) {
+                setAdminSlotLabels(data.themeConfig.slotLabels);
               }
               if (data.themeConfig.eligibleAddonVariantIds !== undefined) {
                 setAdminAddons(data.themeConfig.eligibleAddonVariantIds);
@@ -5915,9 +6166,9 @@ app.get("/", (req, res) => {
             e("div", { style: { marginBottom: "16px" } },
               e("label", { style: { display: "block", fontWeight: "bold", marginBottom: "6px" } }, "Subscription Box Tier"),
               e("select", { value: quizTier, onChange: (e) => setQuizTier(e.target.value), style: { width: "100%", padding: "8px", borderRadius: "4px", border: "1px solid #8c9196" } },
-                e("option", { value: "STARTER" }, "STARTER — Cleanser & Moisturizer Box"),
-                e("option", { value: "PRO" }, "PRO — Advanced Serum Box"),
-                e("option", { value: "ENTERPRISE" }, "ENTERPRISE — Custom Medical Box")
+                e("option", { value: "STARTER" }, "STARTER Tier Box"),
+                e("option", { value: "PRO" }, "PRO Tier Box"),
+                e("option", { value: "ENTERPRISE" }, "ENTERPRISE Tier Box")
               )
             ),
             e("div", { style: { marginBottom: "16px" } },
@@ -6249,7 +6500,7 @@ app.get("/", (req, res) => {
 
         const addDynamicAddOnAdmin = () => {
           if (!portalContract) return;
-          const eligibleAddons = ["gid://shopify/ProductVariant/5001", "gid://shopify/ProductVariant/5002", "gid://shopify/ProductVariant/5003"];
+          const eligibleAddons = adminAddons.length > 0 ? adminAddons : inventory.map(p => p.productId);
           const customerProfile = profiles.find(p => p.customerId === portalContract.customerId);
           const currentSkin = customerProfile ? customerProfile.skinType : "dry";
           const currentAllergens = customerProfile ? (customerProfile.allergens || []) : [];
@@ -6327,7 +6578,7 @@ app.get("/", (req, res) => {
               botText = "GlowBot: Added! 🛍️ Personalized curated product added to your upcoming box. Thank you!";
               addDynamicAddOnAdmin();
             } else if (cmd.toLowerCase() === "help") {
-              botText = "GlowBot Options:\\n1 - Delay 30 Days\\n2 - Skip Next Box\\n3 - Add-on Moisturizer";
+              botText = "GlowBot Options:\\n1 - Delay 30 Days\\n2 - Skip Next Box\\n3 - Add-on Skincare Perk";
             }
             setSmsMessages([...updated, { sender: "bot", text: botText }]);
           }, 800);
@@ -6365,9 +6616,12 @@ app.get("/", (req, res) => {
           // If quantity >= 2, unlock free gift automatically for admin bootstrapped routine!
           const isFreeGiftUnlocked = adminSelectedVariants.length >= 2;
           if (isFreeGiftUnlocked) {
+            const firstGiftId = giftVariantIds[0] || (inventory[0] ? inventory[0].productId : "gid://shopify/ProductVariant/gift");
+            const firstGiftProd = inventory.find(p => p.productId === firstGiftId);
+            const firstGiftName = firstGiftProd ? firstGiftProd.productName.split(" (")[0] + " (Deluxe Sample)" : "Deluxe Routine Sample";
             itemsToCreate.push({
-              variantId: "gid://shopify/ProductVariant/5003",
-              productName: "Hydrating Aloe Deluxe Sample",
+              variantId: firstGiftId,
+              productName: firstGiftName,
               price: 0.00,
               quantity: 1,
               isFreeGift: true
@@ -6491,7 +6745,11 @@ app.get("/", (req, res) => {
                 e("div", { style: { fontSize: "28px" } }, "🎁"),
                 e("div", null,
                   e("span", { style: { background: "#008060", color: "white", fontSize: "9px", fontWeight: "bold", padding: "2px 6px", borderRadius: "10px", textTransform: "uppercase", letterSpacing: "0.5px" } }, "🎁 Included Free"),
-                  e("div", { style: { fontSize: "13px", fontWeight: "bold", color: "#14532d" } }, "Hydrating Aloe Deluxe Sample"),
+                  e("div", { style: { fontSize: "13px", fontWeight: "bold", color: "#14532d" } }, (() => {
+                    const firstGiftId = giftVariantIds[0] || (inventory[0] ? inventory[0].productId : "");
+                    const firstGiftProd = inventory.find(p => p.productId === firstGiftId);
+                    return firstGiftProd ? firstGiftProd.productName.split(" (")[0] + " (Deluxe Sample)" : "Deluxe Routine Sample";
+                  })()),
                   e("div", { style: { fontSize: "11px", color: "#166534", marginTop: "2px" } }, "Milestone reached! Gift sample dynamically active on unboxing shipments.")
                 )
               ),
@@ -6659,6 +6917,33 @@ app.get("/", (req, res) => {
                   value: adminMinStartDateDays, 
                   onChange: (ev) => setAdminMinStartDateDays(ev.target.value), 
                   style: { width: "100%", padding: "10px", borderRadius: "6px", border: "1px solid #cbd5e0", fontSize: "13px", outline: "none", boxSizing: "border-box" } 
+                })
+              )
+            ),
+
+            // Exposing Custom Routine Box Step Labels Configuration (The visual empty slot guides!)
+            e("div", { style: { borderTop: "1px solid #cbd5e0", paddingTop: "16px", marginBottom: "20px" } },
+              e("h4", { style: { fontSize: "14px", fontWeight: "600", color: "#2c3e50", marginBottom: "8px" } }, "📦 Configure Custom Routine Box Step Labels"),
+              e("p", { style: { color: "#6d7175", fontSize: "12px", marginBottom: "12px" } }, "Customize the visual routine guides rendered inside the empty subscription slots in the storefront portal (e.g. Step 1, Step 2, Step 3)."),
+              e("div", { style: { display: "flex", gap: "12px", flexWrap: "wrap" } },
+                [0, 1, 2].map(stepIdx => {
+                  const labelVal = adminSlotLabels[stepIdx] || "";
+                  const handleLabelChange = (ev) => {
+                    const copy = [...adminSlotLabels];
+                    copy[stepIdx] = ev.target.value;
+                    setAdminSlotLabels(copy);
+                  };
+
+                  return e("div", { key: stepIdx, style: { flex: 1, minWidth: "160px" } },
+                    e("label", { style: { display: "block", fontSize: "11px", fontWeight: "bold", color: "#4a5568", marginBottom: "6px" } }, 'Step ' + (stepIdx + 1) + ' Slot Label'),
+                    e("input", { 
+                      type: "text", 
+                      value: labelVal, 
+                      onChange: handleLabelChange, 
+                      placeholder: 'e.g. Step ' + (stepIdx + 1) + ' Cleanser...', 
+                      style: { width: "100%", padding: "10px", borderRadius: "6px", border: "1px solid #cbd5e0", fontSize: "13px", outline: "none", boxSizing: "border-box" } 
+                    })
+                  );
                 })
               )
             ),
