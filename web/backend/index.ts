@@ -1507,6 +1507,73 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
         include: { subscription: true }
       });
 
+      // Load Session and retrieve real live active products from Shopify
+      const session = await prisma.session.findFirst({
+        where: { shop: req.body.session.shop }
+      });
+
+      let shopifyProducts: any[] = [];
+      if (session && session.accessToken) {
+        try {
+          const shopifySession = new Session({
+            id: session.id,
+            shop: session.shop,
+            state: session.state,
+            isOnline: session.isOnline,
+            accessToken: session.accessToken,
+            scope: session.scope || undefined,
+            expires: session.expires || undefined,
+          });
+          const client = new shopify.api.clients.Graphql({ session: shopifySession });
+          const gqlResponse: any = await client.request(
+            `query {
+              products(first: 50) {
+                edges {
+                  node {
+                    id
+                    title
+                    tags
+                    images(first: 1) {
+                      edges {
+                        node {
+                          url
+                        }
+                      }
+                    }
+                    variants(first: 1) {
+                      edges {
+                        node {
+                          id
+                          title
+                          price
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }`
+          );
+          const edges = gqlResponse?.data?.products?.edges || [];
+          shopifyProducts = edges.map((e: any) => {
+            const node = e.node;
+            const imageUrl = node.images?.edges?.[0]?.node?.url || "";
+            const variantNode = node.variants?.edges?.[0]?.node;
+            return {
+              productId: node.id,
+              productName: node.title,
+              variantId: variantNode?.id,
+              variantTitle: variantNode?.title,
+              price: parseFloat(variantNode?.price || "30.00"),
+              imageUrl,
+              tags: node.tags || []
+            };
+          }).filter((p: any) => p.variantId);
+        } catch (gqlErr: any) {
+          console.warn("[Switch Tier Curation Error] Live GraphQL query failed:", gqlErr.message);
+        }
+      }
+
       if (tier === "NONE") {
         // Clear contract items for a clean slate in BYOB mode! Don't add products by default!
         const contract = await prisma.subscriptionContract.findFirst({
@@ -1516,6 +1583,100 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
           await prisma.subscriptionContract.update({
             where: { id: contract.id },
             data: { items: "[]" }
+          });
+        }
+      } else if (shopifyProducts.length > 0) {
+        // Curation engine on live products matching customer DNA profile concerns & allergens
+        const profileAllergens = profile.allergens || [];
+        const profileConcerns = profile.concerns || [];
+        
+        const scoredCurated = shopifyProducts.map((p: any) => {
+          const tags = p.tags || [];
+          
+          // Allergen filter guard
+          const hasConflict = tags.some((t: string) => 
+            profileAllergens.some(allerg => t.toLowerCase().includes(allerg.toLowerCase()))
+          );
+          if (hasConflict) return { ...p, score: 0 };
+
+          let score = 50; // standard match base
+          
+          // Skin type match boost
+          const hasSkinTypeMatch = tags.some((t: string) => 
+            t.toLowerCase().startsWith("skin_type:") && 
+            t.toLowerCase().includes((profile.skinType || "dry").toLowerCase())
+          );
+          if (hasSkinTypeMatch) score += 20;
+
+          // Concerns matches boost
+          const concernMatches = tags.filter((t: string) => 
+            t.toLowerCase().startsWith("concern:") && 
+            profileConcerns.some(c => t.toLowerCase().includes(c.toLowerCase()))
+          );
+          score += concernMatches.length * 20;
+
+          return { ...p, score };
+        });
+
+        // Categorize matching products by step
+        const cleanseList = scoredCurated.filter(p => {
+          const t = p.tags.join(" ").toLowerCase();
+          const name = p.productName.toLowerCase();
+          return t.includes("step:cleanse") || name.includes("cleanse") || name.includes("wash") || name.includes("toner");
+        }).sort((a, b) => b.score - a.score);
+
+        const treatList = scoredCurated.filter(p => {
+          const t = p.tags.join(" ").toLowerCase();
+          const name = p.productName.toLowerCase();
+          return t.includes("step:treat") || name.includes("serum") || name.includes("mask") || name.includes("ampoule");
+        }).sort((a, b) => b.score - a.score);
+
+        const restoreList = scoredCurated.filter(p => {
+          const t = p.tags.join(" ").toLowerCase();
+          const name = p.productName.toLowerCase();
+          return t.includes("step:restore") || name.includes("cream") || name.includes("moisturizer") || name.includes("balm");
+        }).sort((a, b) => b.score - a.score);
+
+        // Curated selections fallbacks
+        const allSorted = [...scoredCurated].sort((a, b) => b.score - a.score);
+        const bestCleanse = cleanseList[0] || allSorted[0];
+        const bestTreat = treatList[0] || allSorted[1] || allSorted[0];
+        const bestRestore = restoreList[0] || allSorted[2] || allSorted[0];
+
+        const selectedItems = [];
+        if (tier === "STARTER" && bestCleanse) {
+          selectedItems.push({
+            variantId: bestCleanse.variantId,
+            productName: bestCleanse.productName,
+            price: bestCleanse.price,
+            quantity: 1
+          });
+        } else if (tier === "PRO") {
+          if (bestCleanse) {
+            selectedItems.push({ variantId: bestCleanse.variantId, productName: bestCleanse.productName, price: bestCleanse.price, quantity: 1 });
+          }
+          if (bestTreat) {
+            selectedItems.push({ variantId: bestTreat.variantId, productName: bestTreat.productName, price: bestTreat.price, quantity: 1 });
+          }
+        } else if (tier === "ENTERPRISE") {
+          if (bestCleanse) {
+            selectedItems.push({ variantId: bestCleanse.variantId, productName: bestCleanse.productName, price: bestCleanse.price, quantity: 1 });
+          }
+          if (bestTreat) {
+            selectedItems.push({ variantId: bestTreat.variantId, productName: bestTreat.productName, price: bestTreat.price, quantity: 1 });
+          }
+          if (bestRestore) {
+            selectedItems.push({ variantId: bestRestore.variantId, productName: bestRestore.productName, price: bestRestore.price, quantity: 1 });
+          }
+        }
+
+        const contract = await prisma.subscriptionContract.findFirst({
+          where: { customerId, shop: req.body.session.shop, status: "ACTIVE" }
+        });
+        if (contract && selectedItems.length > 0) {
+          await prisma.subscriptionContract.update({
+            where: { id: contract.id },
+            data: { items: JSON.stringify(selectedItems) }
           });
         }
       }
@@ -5686,6 +5847,8 @@ app.get("/", (req, res) => {
       const [enableSafetyGuard, setEnableSafetyGuard] = React.useState(true);
 
       const [portalContract, setPortalContract] = React.useState(null);
+      const [adminEditingItems, setAdminEditingItems] = React.useState([]);
+      const [adminIsEditing, setAdminIsEditing] = React.useState(false);
       const [selectedPortalCustomerId, setSelectedPortalCustomerId] = React.useState("");
       const [adminSelectedVariants, setAdminSelectedVariants] = React.useState([]);
       const [adminFrequency, setAdminFrequency] = React.useState(30);
@@ -6209,6 +6372,20 @@ app.get("/", (req, res) => {
           .catch(() => {});
       }, [selectedPortalCustomerId, profiles]);
 
+      React.useEffect(() => {
+        if (portalContract) {
+          try {
+            const list = typeof portalContract.items === "string" ? JSON.parse(portalContract.items) : portalContract.items;
+            setAdminEditingItems(list || []);
+          } catch(e) {
+            setAdminEditingItems([]);
+          }
+        } else {
+          setAdminEditingItems([]);
+        }
+        setAdminIsEditing(false);
+      }, [portalContract]);
+
       const renderHeader = () => {
         return e("div", null,
           e("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "20px" } },
@@ -6637,7 +6814,7 @@ app.get("/", (req, res) => {
                             style: { marginRight: "6px" } 
                           }),
                           e("label", { htmlFor: "assign_" + pIdx + "_" + idx, style: { cursor: "pointer", fontSize: "12px" } }, 
-                            formatProductName(item.productName || item.productId)
+                            formatProductName(item.productName || item.productId) + " (Base: $" + item.price.toFixed(2) + " ➔ Gold: $" + (item.price * (1 - (p.tier3 || 0) / 100)).toFixed(2) + ")"
                           )
                         );
                       })
@@ -6985,7 +7162,28 @@ app.get("/", (req, res) => {
       };
 
       const renderPortalTab = () => {
-        const skipContract = () => {
+       const handleAdminSwitchTier = (newTier) => {
+         if (!selectedPortalCustomerId) return;
+         fetch("/api/storefront/portal/switch-tier", {
+           method: "POST",
+           headers: { 
+             "Content-Type": "application/json",
+             "x-shop-domain": "beauty-e2e-shop.myshopify.com",
+             "x-test-session-id": "beauty-portal-session"
+           },
+           body: JSON.stringify({ customerId: selectedPortalCustomerId, tier: newTier })
+         })
+         .then(res => res.json())
+         .then(data => {
+           if (data.success) {
+             setNotification("🔄 Successfully updated customer subscription plan to: " + (newTier === "NONE" ? "Build-Your-Own Box" : newTier + " Curated Box"));
+             setTimeout(() => setNotification(null), 3000);
+             refreshAllData();
+           }
+         });
+       };
+
+       const skipContract = () => {
           if (!portalContract) return;
           fetch("/api/storefront/portal/postpone", {
             method: "POST",
@@ -7377,13 +7575,158 @@ app.get("/", (req, res) => {
                   e("div", { style: { fontSize: "11px", color: "#6d7175", marginTop: "4px" } }, "Delivery: every " + portalContract.frequencyDays + " days")
                 ),
 
+                (() => {
+                  const activeProf = profiles.find(p => p.customerId === selectedPortalCustomerId);
+                  const currentCurationTier = activeProf ? (activeProf.subscription?.tier || "NONE") : "NONE";
+                  return e("div", { style: { marginBottom: "16px", borderTop: "1px dashed #cbd5e0", borderBottom: "1px dashed #cbd5e0", padding: "10px 0" } },
+                    e("div", { style: { fontSize: "11px", fontWeight: "bold", color: "#4a5568", marginBottom: "6px" } }, "Active Plan / Curation Level"),
+                    e("select", {
+                      value: currentCurationTier,
+                      onChange: (ev) => handleAdminSwitchTier(ev.target.value),
+                      style: { width: "100%", padding: "8px", borderRadius: "6px", border: "1px solid #cbd5e0", fontSize: "13px", outline: "none", background: "white", cursor: "pointer" }
+                    },
+                      e("option", { value: "NONE" }, "Build-Your-Own Box (Recurring BYOB)"),
+                      e("option", { value: "STARTER" }, "STARTER Box ($30/mo)"),
+                      e("option", { value: "PRO" }, "PRO Box ($60/mo)"),
+                      e("option", { value: "ENTERPRISE" }, "ENTERPRISE Box ($120/mo)")
+                    )
+                  );
+                })(),
+
                 e("div", { style: { marginBottom: "16px" } },
-                  e("div", { style: { fontSize: "12px", fontWeight: "bold", color: "#2c3e50", marginBottom: "6px" } }, "Your Routine Bundle:"),
-                  e("div", { style: { border: "1px solid #fafbfb", borderRadius: "6px", backgroundColor: "#fafbfb", padding: "8px" } },
-                    items.map((it, idx) => e("div", { key: idx, style: { display: "flex", justifyContent: "space-between", fontSize: "12px", padding: "4px 0", borderBottom: idx < items.length - 1 ? "1px solid #f0f1f2" : "none" } },
-                      e("span", { style: { color: "#2c3e50" } }, formatProductName(it.productName || it.variantId) + (it.isAddOn ? " (Add-On)" : "")),
-                      e("span", { style: { fontWeight: "bold" } }, "$" + parseFloat(it.price).toFixed(2))
-                    ))
+                  e("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" } },
+                    e("span", { style: { fontSize: "12px", fontWeight: "bold", color: "#2c3e50" } }, "Your Routine Bundle:"),
+                    !adminIsEditing ? (
+                      e("button", { 
+                        onClick: () => setAdminIsEditing(true),
+                        style: { padding: "2px 6px", fontSize: "10px", color: "var(--primary-color)", border: "1px solid var(--primary-color)", background: "white", borderRadius: "4px", cursor: "pointer", fontWeight: "bold" }
+                      }, "✏️ Edit Bundle")
+                    ) : (
+                      e("span", { style: { fontSize: "10px", color: "#008060", fontWeight: "bold" } }, "⚙️ Editing Mode")
+                    )
+                  ),
+                  
+                  !adminIsEditing ? (
+                    e("div", { style: { border: "1px solid #e1e3e5", borderRadius: "6px", backgroundColor: "#fafbfb", padding: "8px" } },
+                      items.length === 0 ? e("div", { style: { fontSize: "12px", color: "#718096", fontStyle: "italic", textAlign: "center", padding: "10px" } }, "Bundle is empty") :
+                      items.map((it, idx) => e("div", { key: idx, style: { display: "flex", justifyContent: "space-between", fontSize: "12px", padding: "4px 0", borderBottom: idx < items.length - 1 ? "1px solid #f0f1f2" : "none" } },
+                        e("span", { style: { color: "#2c3e50" } }, formatProductName(it.productName || it.variantId) + (it.isAddOn ? " (Add-On)" : "") + ((it.quantity || 1) > 1 ? " x" + it.quantity : "")),
+                        e("span", { style: { fontWeight: "bold" } }, "$" + (parseFloat(it.price) * (it.quantity || 1)).toFixed(2))
+                      ))
+                    )
+                  ) : (
+                    e("div", { style: { border: "1.5px dashed var(--primary-color)", borderRadius: "6px", backgroundColor: "#fff", padding: "10px" } },
+                      
+                      // List of items being edited
+                      adminEditingItems.length === 0 ? e("div", { style: { fontSize: "12px", color: "#718096", fontStyle: "italic", textAlign: "center", padding: "10px 0" } }, "No items in bundle. Use selector below to add products.") :
+                      adminEditingItems.map((it, idx) => {
+                        const handleRemoveItem = () => {
+                          setAdminEditingItems(adminEditingItems.filter((_, i) => i !== idx));
+                        };
+                        const handleQtyChange = (delta) => {
+                          const copy = [...adminEditingItems];
+                          const newQty = (copy[idx].quantity || 1) + delta;
+                          if (newQty <= 0) {
+                            copy.splice(idx, 1);
+                          } else {
+                            copy[idx].quantity = newQty;
+                          }
+                          setAdminEditingItems(copy);
+                        };
+                        return e("div", { key: idx, style: { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0", borderBottom: "1px solid #edf2f7" } },
+                          e("div", { style: { textAlign: "left", flex: 1, marginRight: "8px" } },
+                            e("div", { style: { fontSize: "12px", fontWeight: "bold", color: "#2d3748" } }, formatProductName(it.productName || it.variantId) + (it.isAddOn ? " (Add-On)" : "")),
+                            e("div", { style: { fontSize: "10px", color: "#718096", marginTop: "2px" } }, "$" + parseFloat(it.price).toFixed(2) + " each")
+                          ),
+                          e("div", { style: { display: "flex", alignItems: "center", gap: "6px" } },
+                            e("button", { style: { width: "18px", height: "18px", borderRadius: "50%", border: "1px solid #cbd5e0", cursor: "pointer", background: "white", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "11px", padding: 0 }, onClick: () => handleQtyChange(-1) }, "-"),
+                            e("span", { style: { fontSize: "11px", fontWeight: "bold" } }, it.quantity || 1),
+                            e("button", { style: { width: "18px", height: "18px", borderRadius: "50%", border: "1px solid #cbd5e0", cursor: "pointer", background: "white", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "11px", padding: 0 }, onClick: () => handleQtyChange(1) }, "+"),
+                            e("button", { style: { marginLeft: "6px", border: "none", background: "none", color: "#e53e3e", fontSize: "12px", fontWeight: "bold", cursor: "pointer" }, onClick: handleRemoveItem }, "✕")
+                          )
+                        );
+                      }),
+
+                      // Dynamic add-product select dropdown inside bundle editor
+                      e("div", { style: { marginTop: "12px", borderTop: "1px dashed #e2e8f0", paddingTop: "10px" } },
+                        e("label", { style: { display: "block", fontSize: "10px", fontWeight: "bold", color: "#718096", marginBottom: "4px" } }, "➕ Add Skincare Product to Bundle"),
+                        e("select", {
+                          value: "",
+                          onChange: (ev) => {
+                            const val = ev.target.value;
+                            if (!val) return;
+                            const prod = inventory.find(p => p.productId === val);
+                            if (prod) {
+                              const existingIdx = adminEditingItems.findIndex(x => x.variantId === val);
+                              if (existingIdx > -1) {
+                                const copy = [...adminEditingItems];
+                                copy[existingIdx].quantity = (copy[existingIdx].quantity || 1) + 1;
+                                setAdminEditingItems(copy);
+                              } else {
+                                setAdminEditingItems([...adminEditingItems, {
+                                  variantId: val,
+                                  productName: prod.productName.split(" (")[0],
+                                  price: prod.price,
+                                  quantity: 1
+                                }]);
+                              }
+                            }
+                          },
+                          style: { width: "100%", padding: "6px", borderRadius: "4px", border: "1px solid #cbd5e0", fontSize: "12px", background: "white", cursor: "pointer" }
+                        },
+                          e("option", { value: "" }, "Select a product to add..."),
+                          inventory.map(inv => e("option", { key: inv.productId, value: inv.productId }, formatProductName(inv.productName || inv.productId) + " ($" + inv.price.toFixed(2) + ")"))
+                        )
+                      ),
+
+                      // Save/Cancel Action Buttons row inside bundle editor
+                      e("div", { style: { display: "flex", gap: "8px", marginTop: "12px" } },
+                        e("button", {
+                          onClick: () => {
+                            setActivating(true);
+                            fetch("/api/storefront/portal/update-items", {
+                              method: "POST",
+                              headers: { 
+                                "Content-Type": "application/json",
+                                "x-shop-domain": "beauty-e2e-shop.myshopify.com",
+                                "x-test-session-id": "beauty-portal-session"
+                              },
+                              body: JSON.stringify({
+                                contractId: portalContract.id,
+                                items: adminEditingItems
+                              })
+                            })
+                            .then(res => res.json())
+                            .then(data => {
+                              setActivating(false);
+                              if (data.success) {
+                                setPortalContract(data.contract);
+                                setNotification("💾 Successfully saved bundle updates to subscription contract!");
+                                setTimeout(() => setNotification(null), 3000);
+                                setAdminIsEditing(false);
+                                refreshAllData();
+                              }
+                            });
+                          },
+                          className: "button-primary",
+                          style: { flex: 1, padding: "6px 12px", fontSize: "11px", backgroundColor: "#008060" }
+                        }, "💾 Save Changes"),
+                        e("button", {
+                          onClick: () => {
+                            try {
+                              const list = typeof portalContract.items === "string" ? JSON.parse(portalContract.items) : portalContract.items;
+                              setAdminEditingItems(list || []);
+                            } catch(e) {
+                              setAdminEditingItems([]);
+                            }
+                            setAdminIsEditing(false);
+                          },
+                          className: "button-secondary",
+                          style: { flex: 0.8, padding: "6px 12px", fontSize: "11px" }
+                        }, "✕ Cancel")
+                      )
+
+                    )
                   )
                 ),
 
