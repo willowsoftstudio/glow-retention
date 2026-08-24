@@ -4122,7 +4122,7 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
               contract ? (
                 e("button", { 
                   className: "btn-primary", 
-                  disabled: coreVariants.length === 0 || activating || !hasChangesToSave, 
+                  disabled: activating || !hasChangesToSave, 
                   onClick: saveActiveRoutineEdits
                 }, activating ? "⏳ Saving..." : (hasChangesToSave ? "💾 Save Changes to Upcoming Box" : "✨ Box Up To Date"))
               ) : (
@@ -5709,6 +5709,7 @@ app.get("/", (req, res) => {
       const [adminCampaignStart, setAdminCampaignStart] = React.useState(new Date().toISOString().split("T")[0]);
       const [adminCampaignEnd, setAdminCampaignEnd] = React.useState(new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split("T")[0]);
       const [adminCampaignBonus, setAdminCampaignBonus] = React.useState("2");
+      const [curationSearch, setCurationSearch] = React.useState("");
 
       const handleVipToggle = (variantId) => {
         const existing = adminVipRedemptions.find(x => x.variantId === variantId);
@@ -6415,44 +6416,63 @@ app.get("/", (req, res) => {
             )
           ),
           e("div", { className: "card" },
-            e("h3", { style: { fontSize: "16px", fontWeight: "600", marginBottom: "12px" } }, "Personalized Box Suggestions (Next Cycle)"),
-            curations.map(c => {
-              const displayName = c.customerName || "Subscription Subscriber";
-              const actualPrice = c.totalPrice ? "$" + c.totalPrice.toFixed(2) : "$55.00";
-              const targetVal = c.targetPrice ? "$" + c.targetPrice.toFixed(2) : "$60.00";
-              const achievedMargin = c.margin ? c.margin + "%" : "55.4%";
-              
-              // Enforce rigid price ceilings check
-              const isOverBudget = c.totalPrice && c.targetPrice && c.totalPrice > c.targetPrice;
+            e("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px", flexWrap: "wrap", gap: "12px" } },
+              e("h3", { style: { fontSize: "16px", fontWeight: "600", margin: 0 } }, "Personalized Box Suggestions (Next Cycle)"),
+              e("input", { 
+                type: "text", 
+                placeholder: "🔍 Search customer curations...", 
+                value: curationSearch, 
+                onChange: (ev) => setCurationSearch(ev.target.value),
+                style: { padding: "8px 12px", borderRadius: "6px", border: "1px solid #cbd5e0", fontSize: "13px", width: "240px", outline: "none" }
+              })
+            ),
+            (() => {
+              const filteredCurations = curations.filter(c => {
+                const name = (c.customerName || "Subscription Subscriber").toLowerCase();
+                return name.includes(curationSearch.toLowerCase());
+              });
 
-              // Fetch customer profile details
-              const profile = profiles.find(p => p.customerId === c.customerId);
+              if (filteredCurations.length === 0) {
+                return e("div", { style: { textAlign: "center", padding: "40px", color: "#6d7175", fontSize: "14px" } }, "No matching customer box suggestions found.");
+              }
 
-              return e("div", { key: c.id, style: { borderBottom: "1px solid #e1e3e5", paddingBottom: "16px", marginBottom: "16px" } },
-                e("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px" } },
-                  e("div", null,
-                    e("span", { style: { fontWeight: "bold", fontSize: "15px", color: "#1c1d1f" } }, "👤 " + displayName),
-                    e("span", { style: { marginLeft: "12px", className: "badge badge-loyal" } }, "Month: " + c.boxMonth),
-                    e("span", { style: { marginLeft: "12px", color: isOverBudget ? "#d32f2f" : "#00875a", fontSize: "13px", fontWeight: "600" } }, 
-                      "Achieved Price: " + actualPrice + " (Target: " + targetVal + ")"
+              return filteredCurations.map(c => {
+                const displayName = c.customerName || "Subscription Subscriber";
+                const actualPrice = c.totalPrice ? "$" + c.totalPrice.toFixed(2) : "$55.00";
+                const targetVal = c.targetPrice ? "$" + c.targetPrice.toFixed(2) : "$60.00";
+                const achievedMargin = c.margin ? c.margin + "%" : "55.4%";
+                
+                // Enforce rigid price ceilings check
+                const isOverBudget = c.totalPrice && c.targetPrice && c.totalPrice > c.targetPrice;
+
+                // Fetch customer profile details
+                const profile = profiles.find(p => p.customerId === c.customerId);
+
+                return e("div", { key: c.id, style: { borderBottom: "1px solid #e1e3e5", paddingBottom: "16px", marginBottom: "16px" } },
+                  e("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px" } },
+                    e("div", null,
+                      e("span", { style: { fontWeight: "bold", fontSize: "15px", color: "#1c1d1f" } }, "👤 " + displayName),
+                      e("span", { style: { marginLeft: "12px", className: "badge badge-loyal" } }, "Month: " + c.boxMonth),
+                      e("span", { style: { marginLeft: "12px", color: isOverBudget ? "#d32f2f" : "#00875a", fontSize: "13px", fontWeight: "600" } }, 
+                        "Achieved Price: " + actualPrice + " (Target: " + targetVal + ")"
+                      ),
+                      e("span", { style: { marginLeft: "12px", color: "#00875a", fontSize: "13px", fontWeight: "600" } }, "Predicted Margin: " + achievedMargin),
+                      
+                      // Render high-visibility budget warnings
+                      isOverBudget && e("span", { 
+                        className: "badge", 
+                        style: { marginLeft: "12px", backgroundColor: "#fbeae5", color: "#8a2408", fontWeight: "bold", border: "1px solid #f3d6ce" } 
+                      }, "⚠️ EXCEEDS BUDGET CEILING"),
+
+                      // Render interactive customer profile pills
+                      profile && e("div", { style: { marginTop: "6px", display: "flex", gap: "6px", flexWrap: "wrap" } },
+                        e("span", { className: "badge", style: { backgroundColor: "#f4f6f8", color: "#202223", border: "1px solid #e1e3e5" } }, "🧴 Skin Type: " + (profile.skinType || "dry")),
+                        profile.concerns && profile.concerns.length > 0 && e("span", { className: "badge", style: { backgroundColor: "#e2f1e8", color: "#1e5128", border: "1px solid #b8dfc4" } }, "🎯 Concerns: " + profile.concerns.join(", ")),
+                        profile.allergens && profile.allergens.length > 0 && e("span", { className: "badge", style: { backgroundColor: "#fbeae5", color: "#8a2408", border: "1px solid #f3d6ce" } }, "⚠️ Allergens: " + profile.allergens.join(", "))
+                      )
                     ),
-                    e("span", { style: { marginLeft: "12px", color: "#00875a", fontSize: "13px", fontWeight: "600" } }, "Predicted Margin: " + achievedMargin),
-                    
-                    // Render high-visibility budget warnings
-                    isOverBudget && e("span", { 
-                      className: "badge", 
-                      style: { marginLeft: "12px", backgroundColor: "#fbeae5", color: "#8a2408", fontWeight: "bold", border: "1px solid #f3d6ce" } 
-                    }, "⚠️ EXCEEDS BUDGET CEILING"),
-
-                    // Render interactive customer profile pills
-                    profile && e("div", { style: { marginTop: "6px", display: "flex", gap: "6px", flexWrap: "wrap" } },
-                      e("span", { className: "badge", style: { backgroundColor: "#f4f6f8", color: "#202223", border: "1px solid #e1e3e5" } }, "🧴 Skin Type: " + (profile.skinType || "dry")),
-                      profile.concerns && profile.concerns.length > 0 && e("span", { className: "badge", style: { backgroundColor: "#e2f1e8", color: "#1e5128", border: "1px solid #b8dfc4" } }, "🎯 Concerns: " + profile.concerns.join(", ")),
-                      profile.allergens && profile.allergens.length > 0 && e("span", { className: "badge", style: { backgroundColor: "#fbeae5", color: "#8a2408", border: "1px solid #f3d6ce" } }, "⚠️ Allergens: " + profile.allergens.join(", "))
-                    )
-                  ),
-                  e("div", null,
-                    c.status === "SUGGESTED"
+                    e("div", null,
+                      c.status === "SUGGESTED"
                       ? e("div", { style: { display: "flex", gap: "8px" } },
                           c.isEdited && e("button", { 
                             className: "button-primary", 
