@@ -4004,26 +4004,38 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
                       }
                       
                       const matchScore = Math.min(100, score);
-                      const isRecommended = matchScore >= 85;
-
-                      return e("div", { style: { display: "flex", gap: "4px", flexWrap: "wrap", marginTop: "6px", marginBottom: "6px" } },
-                        e("span", { 
-                          className: "free-gift-badge", 
-                          style: { 
-                            background: isRecommended ? "#e2f1e8" : "#edf2f7", 
-                            color: isRecommended ? "#1e5128" : "#4a5568", 
-                            fontSize: "8px", 
-                            border: isRecommended ? "1px solid #b8dfc4" : "1px solid #cbd5e0", 
-                            padding: "2px 4px", 
-                            fontWeight: "bold" 
-                          } 
-                        }, "🎯 " + matchScore + "% AI MATCH"),
-                        
-                        isRecommended && e("span", { 
-                          className: "free-gift-badge", 
-                          style: { background: "#feebc8", color: "#7b341e", fontSize: "8px", border: "1px solid #fbd38d", padding: "2px 4px", fontWeight: "bold" } 
-                        }, "RECOMMENDED")
-                      );
+                      
+                      if (matchScore >= 95) {
+                        return e("div", { style: { display: "flex", gap: "4px", flexWrap: "wrap", marginTop: "6px", marginBottom: "6px" } },
+                          e("span", { 
+                            className: "free-gift-badge", 
+                            style: { 
+                              background: "#e2f1e8", 
+                              color: "#1e5128", 
+                              fontSize: "8px", 
+                              border: "1px solid #b8dfc4", 
+                              padding: "2px 6px", 
+                              fontWeight: "bold" 
+                            } 
+                          }, "✨ BEST MATCH")
+                        );
+                      } else if (matchScore >= 75) {
+                        return e("div", { style: { display: "flex", gap: "4px", flexWrap: "wrap", marginTop: "6px", marginBottom: "6px" } },
+                          e("span", { 
+                            className: "free-gift-badge", 
+                            style: { 
+                              background: "#feebc8", 
+                              color: "#7b341e", 
+                              fontSize: "8px", 
+                              border: "1px solid #fbd38d", 
+                              padding: "2px 6px", 
+                              fontWeight: "bold" 
+                            } 
+                          }, "👍 RECOMMENDED")
+                        );
+                      }
+                      
+                      return null;
                     })(),
                     
                     isEligibleForBreaks && e("div", { style: { marginTop: "4px", marginBottom: "4px" } },
