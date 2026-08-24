@@ -1507,6 +1507,19 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
         include: { subscription: true }
       });
 
+      if (tier === "NONE") {
+        // Clear contract items for a clean slate in BYOB mode! Don't add products by default!
+        const contract = await prisma.subscriptionContract.findFirst({
+          where: { customerId, shop: req.body.session.shop, status: "ACTIVE" }
+        });
+        if (contract) {
+          await prisma.subscriptionContract.update({
+            where: { id: contract.id },
+            data: { items: "[]" }
+          });
+        }
+      }
+
       console.log(`[Storefront Tier Switch] Customer ${customerId} updated subscription tier to: ${tier}`);
       res.json({ success: true, profile: updatedProfile });
     } catch (err: any) {
@@ -2492,6 +2505,9 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
           setActivating(false);
           if (data.success) {
             setCurrentTier(newTier);
+            if (newTier === "NONE") {
+              setCoreVariants([]); // Clear core variants for a pristine empty slate in BYOB mode!
+            }
             setNotification("🔄 Successfully switched subscription mode to " + (newTier === "NONE" ? "Build-Your-Own Box" : newTier + " Curated Box") + "!");
             setTimeout(() => setNotification(null), 3000);
           }
@@ -3858,12 +3874,26 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
               const isCuration = ["STARTER", "PRO", "ENTERPRISE"].includes(currentTier);
               if (isCuration) {
                 return e("div", null,
-                  e("div", { style: { background: "var(--primary-light)", border: "1.5px dashed var(--primary-color)", borderRadius: "8px", padding: "16px", marginBottom: "16px", display: "flex", justifyContent: "space-between", alignItems: "center" } },
-                    e("div", { style: { textAlign: "left" } },
-                      e("div", { style: { fontSize: "12px", fontWeight: "700", color: "var(--primary-color)", display: "flex", alignItems: "center", gap: "6px" } }, "✨ Personalized AI Curation Plan Active"),
-                      e("div", { style: { fontSize: "10px", color: "#718096", marginTop: "2px" } }, "Active Tier: " + currentTier + " Box. Curation override slots active.")
+                  e("div", { style: { background: "var(--primary-light)", border: "1.5px dashed var(--primary-color)", borderRadius: "8px", padding: "16px", marginBottom: "16px" } },
+                    e("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px" } },
+                      e("div", { style: { textAlign: "left" } },
+                        e("div", { style: { fontSize: "12px", fontWeight: "700", color: "var(--primary-color)", display: "flex", alignItems: "center", gap: "6px" } }, "✨ Personalized AI Curation Plan Active"),
+                        e("div", { style: { fontSize: "10px", color: "#718096", marginTop: "2px" } }, "Active Tier: " + currentTier + " Box. Curation override slots active.")
+                      ),
+                      e("button", { style: { padding: "4px 8px", fontSize: "10px", color: "#4a5568", border: "1px solid #cbd5e0", background: "white", borderRadius: "4px", cursor: "pointer", fontWeight: "bold" }, onClick: () => switchSubscriptionMode("NONE") }, "Switch to BYOB Box")
                     ),
-                    e("button", { style: { padding: "4px 8px", fontSize: "10px", color: "#4a5568", border: "1px solid #cbd5e0", background: "white", borderRadius: "4px", cursor: "pointer", fontWeight: "bold" }, onClick: () => switchSubscriptionMode("NONE") }, "Switch to BYOB Box")
+                    e("div", { style: { display: "flex", alignItems: "center", gap: "8px", borderTop: "1px dashed var(--primary-color)", paddingTop: "10px" } },
+                      e("span", { style: { fontSize: "11px", fontWeight: "bold", color: "#4a5568" } }, "Change Curation Level:"),
+                      e("select", {
+                        value: currentTier,
+                        onChange: (ev) => switchSubscriptionMode(ev.target.value),
+                        style: { padding: "4px 8px", borderRadius: "4px", border: "1px solid var(--primary-color)", fontSize: "11px", outline: "none", background: "white", cursor: "pointer" }
+                      },
+                        e("option", { value: "STARTER" }, "STARTER Box ($30/mo)"),
+                        e("option", { value: "PRO" }, "PRO Box ($60/mo)"),
+                        e("option", { value: "ENTERPRISE" }, "ENTERPRISE Box ($120/mo)")
+                      )
+                    )
                   ),
                   
                   // Widescreen Visual Slots Routine Builder Card
