@@ -3983,6 +3983,48 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
                       onClick: (ev) => { ev.stopPropagation(); setActiveModalProduct(prod); },
                       style: { cursor: "zoom-in" }
                     }, prod.productName),
+
+                    (() => {
+                      const currentSkin = profile ? profile.skinType : formSkinType;
+                      const currentConcern = profile ? (profile.concerns?.[0] || "aging") : (formConcerns?.[0] || "aging");
+                      const name = prod.productName.toLowerCase();
+                      
+                      let score = 70; // standard match
+                      if (currentSkin === "dry") {
+                        if (name.includes("serum") || name.includes("vitamin") || name.includes("moistur") || name.includes("cream")) {
+                          score += 25;
+                        }
+                      } else if (currentSkin === "oily" || currentSkin === "combination") {
+                        if (name.includes("clean") || name.includes("mask") || name.includes("charcoal") || name.includes("wash")) {
+                          score += 25;
+                        }
+                      }
+                      if (currentConcern && name.includes(currentConcern.toLowerCase())) {
+                        score += 5;
+                      }
+                      
+                      const matchScore = Math.min(100, score);
+                      const isRecommended = matchScore >= 85;
+
+                      return e("div", { style: { display: "flex", gap: "4px", flexWrap: "wrap", marginTop: "6px", marginBottom: "6px" } },
+                        e("span", { 
+                          className: "free-gift-badge", 
+                          style: { 
+                            background: isRecommended ? "#e2f1e8" : "#edf2f7", 
+                            color: isRecommended ? "#1e5128" : "#4a5568", 
+                            fontSize: "8px", 
+                            border: isRecommended ? "1px solid #b8dfc4" : "1px solid #cbd5e0", 
+                            padding: "2px 4px", 
+                            fontWeight: "bold" 
+                          } 
+                        }, "🎯 " + matchScore + "% AI MATCH"),
+                        
+                        isRecommended && e("span", { 
+                          className: "free-gift-badge", 
+                          style: { background: "#feebc8", color: "#7b341e", fontSize: "8px", border: "1px solid #fbd38d", padding: "2px 4px", fontWeight: "bold" } 
+                        }, "RECOMMENDED")
+                      );
+                    })(),
                     
                     isEligibleForBreaks && e("div", { style: { marginTop: "4px", marginBottom: "4px" } },
                       e("span", { className: "free-gift-badge", style: { background: "var(--primary-light)", color: "var(--primary-color)", fontSize: "8px", border: "1px solid var(--primary-color)", padding: "1px 4px", display: "inline-block" } }, "✨ Tier Eligible")
@@ -5821,24 +5863,9 @@ app.get("/", (req, res) => {
       const [settingsHigh, setSettingsHigh] = React.useState("120.0");
       const [settingsMargin, setSettingsMargin] = React.useState("55.0");
 
-      const [curations, setCurations] = React.useState([
-        {
-          id: "c1",
-          subscriptionTier: "PRO",
-          boxMonth: "2026-09",
-          status: "SUGGESTED",
-          margin: 55.4,
-          suggestedItems: [
-            { variantId: "gid://shopify/ProductVariant/default-1", productName: "Premium Skincare Item A", score: 95, reason: "Matches customer concerns" },
-            { variantId: "gid://shopify/ProductVariant/default-2", productName: "Premium Skincare Item B", score: 88, reason: "Matches margin goals" }
-          ]
-        }
-      ]);
+      const [curations, setCurations] = React.useState([]);
 
-      const [inventory, setInventory] = React.useState([
-        { productId: "gid://shopify/ProductVariant/default-1", productName: "Premium Skincare Item A", retentionValue: 85.0, returnRate: 2.0, satisfaction: 4.8, margin: 60.0, price: 30.0, cost: 12.0, stockLevel: 1000, stockRisk: "LOW" },
-        { productId: "gid://shopify/ProductVariant/default-2", productName: "Premium Skincare Item B", retentionValue: 70.0, returnRate: 4.0, satisfaction: 4.5, margin: 50.0, price: 25.0, cost: 12.5, stockLevel: 2000, stockRisk: "LOW" }
-      ]);
+      const [inventory, setInventory] = React.useState([]);
 
       const [milestoneOrderCount, setMilestoneOrderCount] = React.useState(3);
       const [giftVariantIds, setGiftVariantIds] = React.useState([]);
