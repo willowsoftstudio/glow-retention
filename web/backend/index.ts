@@ -6011,7 +6011,7 @@ app.get("/", (req, res) => {
         })
         .then(res => res.json())
         .then(data => {
-          setNotification(\`🎉 Adaptive Curation complete! Optimized box suggestions for \${data.count} customer profiles.\`);
+          setNotification("🎉 Adaptive Curation complete! Optimized box suggestions for " + data.count + " customer profiles.");
           refreshAllData();
         })
         .catch(err => console.error("Error generating curations:", err));
@@ -6528,7 +6528,8 @@ app.get("/", (req, res) => {
                   )
                 )
               );
-            })()
+            });
+          })()
           )
         );
       };
