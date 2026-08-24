@@ -2808,22 +2808,22 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
         }
       };
 
+      const getProductStep = (p) => {
+        const name = p.productName.toLowerCase();
+        if (name.includes("clean") || name.includes("wash") || name.includes("foam") || name.includes("soap")) return "Cleanse";
+        if (name.includes("treat") || name.includes("serum") || name.includes("acid") || name.includes("mask") || name.includes("peel")) return "Treat";
+        if (name.includes("moistur") || name.includes("cream") || name.includes("lotion") || name.includes("restore") || name.includes("balm") || name.includes("shield")) return "Restore";
+        // Dynamic fallback to ensure balance
+        const code = p.variantId.charCodeAt(p.variantId.length - 1) || 0;
+        if (code % 3 === 0) return "Cleanse";
+        if (code % 3 === 1) return "Treat";
+        return "Restore";
+      };
+
       // Pipeline: Search, Filter, Curation Sorting & Pagination
       const pipelineData = React.useMemo(() => {
         const currentSkin = profile ? profile.skinType : formSkinType;
         const currentConcern = profile ? (profile.concerns?.[0] || "aging") : (formConcerns?.[0] || "aging");
-
-        const getProductStep = (p) => {
-          const name = p.productName.toLowerCase();
-          if (name.includes("clean") || name.includes("wash") || name.includes("foam") || name.includes("soap")) return "Cleanse";
-          if (name.includes("treat") || name.includes("serum") || name.includes("acid") || name.includes("mask") || name.includes("peel")) return "Treat";
-          if (name.includes("moistur") || name.includes("cream") || name.includes("lotion") || name.includes("restore") || name.includes("balm") || name.includes("shield")) return "Restore";
-          // Dynamic fallback to ensure balance
-          const code = p.variantId.charCodeAt(p.variantId.length - 1) || 0;
-          if (code % 3 === 0) return "Cleanse";
-          if (code % 3 === 1) return "Treat";
-          return "Restore";
-        };
 
         // 1. Search Filter (by name case-insensitively)
         let filtered = [...liveProducts];
