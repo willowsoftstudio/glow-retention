@@ -35,6 +35,7 @@ model Session {
   milestoneOrderCount Int       @default(3)
   giftVariantIds      String    @default("[]")
   enableSafetyGuard   Boolean   @default(true)
+  themeSettingsJson   String?
 }
 
 model CustomerProfile {
