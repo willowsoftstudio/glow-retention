@@ -1426,7 +1426,10 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
         campaignStartDate,
         campaignEndDate,
         campaignBonusLimit,
-        discountProfiles 
+        discountProfiles,
+        starterValueCap,
+        proValueCap,
+        enterpriseValueCap
       } = req.body;
       if (!shop) {
         return res.status(400).json({ error: "Missing required shop parameter" });
@@ -1476,7 +1479,10 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
         campaignStartDate: campaignStartDate || existingConfig.campaignStartDate || new Date().toISOString().split("T")[0],
         campaignEndDate: campaignEndDate || existingConfig.campaignEndDate || new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split("T")[0],
         campaignBonusLimit: campaignBonusLimit !== undefined ? parseInt(campaignBonusLimit) : (existingConfig.campaignBonusLimit !== undefined ? existingConfig.campaignBonusLimit : 2),
-        discountProfiles: discountProfiles || existingProfiles
+        discountProfiles: discountProfiles || existingProfiles,
+        starterValueCap: starterValueCap !== undefined ? parseInt(starterValueCap) : (existingConfig.starterValueCap !== undefined ? existingConfig.starterValueCap : 45),
+        proValueCap: proValueCap !== undefined ? parseInt(proValueCap) : (existingConfig.proValueCap !== undefined ? existingConfig.proValueCap : 80),
+        enterpriseValueCap: enterpriseValueCap !== undefined ? parseInt(enterpriseValueCap) : (existingConfig.enterpriseValueCap !== undefined ? existingConfig.enterpriseValueCap : 150)
       };
 
       await saveMerchantConfig(shop, newConfig);
@@ -2046,6 +2052,10 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
       if (allConfigs.discountProfiles) {
         discountProfiles = allConfigs.discountProfiles;
       }
+
+      const starterValueCap = allConfigs.starterValueCap !== undefined ? parseInt(allConfigs.starterValueCap) : 45;
+      const proValueCap = allConfigs.proValueCap !== undefined ? parseInt(allConfigs.proValueCap) : 80;
+      const enterpriseValueCap = allConfigs.enterpriseValueCap !== undefined ? parseInt(allConfigs.enterpriseValueCap) : 150;
 
       // Calculate dynamic max addon limit on the backend!
       let dynamicMaxLimit = maxAddonLimit;
@@ -2638,6 +2648,9 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
       const eligibleAddons = ${JSON.stringify(eligibleAddonVariantIds)};
       const vipRedemptions = ${JSON.stringify(vipRedemptions)};
       const maxAddonLimit = ${dynamicMaxLimit};
+      const starterValueCap = ${starterValueCap};
+      const proValueCap = ${proValueCap};
+      const enterpriseValueCap = ${enterpriseValueCap};
 
       const [selectedGiftId, setSelectedGiftId] = React.useState("");
       const [claimingGift, setClaimingGift] = React.useState(false);
@@ -2783,17 +2796,35 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
       };
 
       const totalPrice = React.useMemo(() => {
-        const coreSum = coreVariants.reduce((sum, vId) => {
-          const prod = liveProducts.find(p => p.variantId === vId);
-          const basePrice = prod ? prod.price : 30.00;
-          return sum + getCustomDiscountPrice(vId, basePrice);
-        }, 0);
+        const isCuration = ["STARTER", "PRO", "ENTERPRISE"].includes(currentTier);
+        
+        let coreSum = 0;
+        if (isCuration) {
+          // Resolve standard flat-rate box price configured in merchant settings
+          let baseBoxPrice = 0;
+          if (currentTier === "STARTER") baseBoxPrice = priceLow;
+          else if (currentTier === "PRO") baseBoxPrice = priceMedium;
+          else if (currentTier === "ENTERPRISE") baseBoxPrice = priceHigh;
+
+          // Enforce promo discounts applied directly on their curated flat-rate total
+          const contractDiscount = contract ? ((contract as any).discountPercentage || 0) : 0;
+          coreSum = baseBoxPrice * ((100 - contractDiscount) / 100);
+        } else {
+          // Flexible volume breaks for Build-Your-Own Box recurring items
+          coreSum = coreVariants.reduce((sum, vId) => {
+            const prod = liveProducts.find(p => p.variantId === vId);
+            const basePrice = prod ? prod.price : 30.00;
+            return sum + getCustomDiscountPrice(vId, basePrice);
+          }, 0);
+        }
+
         const addonSum = addonVariants.reduce((sum, vId) => {
           const prod = liveProducts.find(p => p.variantId === vId);
           return sum + (prod ? prod.price : 30.00);
         }, 0);
+
         return coreSum + addonSum;
-      }, [coreVariants, addonVariants, liveProducts]);
+      }, [coreVariants, addonVariants, liveProducts, currentTier, contract, discountProfiles]);
 
       const handleIncrement = (vId) => {
         setCoreVariants([...coreVariants, vId]);
@@ -4414,12 +4445,31 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
                               onChange: (ev) => {
                                 const newVarId = ev.target.value;
                                 if (!newVarId) return;
+
+                                // Assemble prospective core bundle variants list
                                 const copy = [...coreVariants];
                                 const idx = copy.indexOf(activeModalProduct.variantId);
                                 if (idx > -1) {
                                   copy[idx] = newVarId;
-                                  setCoreVariants(copy);
                                 }
+
+                                // Calculate prospective aggregate retail value
+                                const prospectiveSum = copy.reduce((sum, vId) => {
+                                  const p = liveProducts.find(x => x.variantId === vId);
+                                  return sum + (p ? p.price : 30.00);
+                                }, 0);
+
+                                let cap = 999;
+                                if (currentTier === "STARTER") cap = starterValueCap;
+                                else if (currentTier === "PRO") cap = proValueCap;
+                                else if (currentTier === "ENTERPRISE") cap = enterpriseValueCap;
+
+                                if (prospectiveSum > cap) {
+                                  alert("⚠️ Swap Blocked: Swapping to this skincare item would bring your routine's aggregate retail value to $" + prospectiveSum.toFixed(2) + ", which exceeds your plan's maximum allowed box budget cap of $" + cap.toFixed(2) + "! Please select a different compatible alternative to protect your box margin.");
+                                  return;
+                                }
+
+                                setCoreVariants(copy);
                                 setActiveModalProduct(null);
                               },
                               style: { width: "100%", padding: "10px", borderRadius: "6px", border: "1px solid var(--primary-color)", fontSize: "13px", background: "white", cursor: "pointer" }
@@ -5940,6 +5990,9 @@ app.get("/", (req, res) => {
       const [adminMinStartDateDays, setAdminMinStartDateDays] = React.useState("2");
       const [adminSlotLabels, setAdminSlotLabels] = React.useState(["Cleanse 🧴", "Treat 🔮", "Restore ❄️"]);
       const [adminStartDate, setAdminStartDate] = React.useState("");
+      const [adminStarterCap, setAdminStarterCap] = React.useState("45");
+      const [adminProCap, setAdminProCap] = React.useState("80");
+      const [adminEnterpriseCap, setAdminEnterpriseCap] = React.useState("150");
 
       const [adminTier1, setAdminTier1] = React.useState(15);
       const [adminTier2, setAdminTier2] = React.useState(20);
@@ -6336,6 +6389,9 @@ app.get("/", (req, res) => {
             if (data.campaignEndDate !== undefined) setAdminCampaignEnd(data.campaignEndDate);
             if (data.campaignBonusLimit !== undefined) setAdminCampaignBonus(data.campaignBonusLimit.toString());
             if (data.discountProfiles !== undefined) setAdminDiscountProfiles(data.discountProfiles);
+            if (data.starterValueCap !== undefined) setAdminStarterCap(data.starterValueCap.toString());
+            if (data.proValueCap !== undefined) setAdminProCap(data.proValueCap.toString());
+            if (data.enterpriseValueCap !== undefined) setAdminEnterpriseCap(data.enterpriseValueCap.toString());
           })
           .catch(() => {});
       };
@@ -6368,7 +6424,10 @@ app.get("/", (req, res) => {
             campaignStartDate: adminCampaignStart,
             campaignEndDate: adminCampaignEnd,
             campaignBonusLimit: parseInt(adminCampaignBonus || "2"),
-            discountProfiles: profiles
+            discountProfiles: profiles,
+            starterValueCap: parseInt(adminStarterCap || "45"),
+            proValueCap: parseInt(adminProCap || "80"),
+            enterpriseValueCap: parseInt(adminEnterpriseCap || "150")
           })
         })
         .then(res => res.json())
@@ -7671,17 +7730,37 @@ app.get("/", (req, res) => {
                 (() => {
                   const activeProf = profiles.find(p => p.customerId === selectedPortalCustomerId);
                   const currentCurationTier = activeProf ? (activeProf.subscription?.tier || "NONE") : "NONE";
-                  return e("div", { style: { marginBottom: "16px", borderTop: "1px dashed #cbd5e0", borderBottom: "1px dashed #cbd5e0", padding: "10px 0" } },
-                    e("div", { style: { fontSize: "11px", fontWeight: "bold", color: "#4a5568", marginBottom: "6px" } }, "Active Plan / Curation Level"),
-                    e("select", {
-                      value: currentCurationTier,
-                      onChange: (ev) => handleAdminSwitchTier(ev.target.value),
-                      style: { width: "100%", padding: "8px", borderRadius: "6px", border: "1px solid #cbd5e0", fontSize: "13px", outline: "none", background: "white", cursor: "pointer" }
-                    },
-                      e("option", { value: "NONE" }, "Build-Your-Own Box (Recurring BYOB)"),
-                      e("option", { value: "STARTER" }, "STARTER Box ($30/mo)"),
-                      e("option", { value: "PRO" }, "PRO Box ($60/mo)"),
-                      e("option", { value: "ENTERPRISE" }, "ENTERPRISE Box ($120/mo)")
+                  const deliveredProductIds = activeProf?.subscription?.deliveredProductIds || [];
+                  
+                  return e("div", null,
+                    e("div", { style: { marginBottom: "16px", borderTop: "1px dashed #cbd5e0", borderBottom: "1px dashed #cbd5e0", padding: "10px 0" } },
+                      e("div", { style: { fontSize: "11px", fontWeight: "bold", color: "#4a5568", marginBottom: "6px" } }, "Active Plan / Curation Level"),
+                      e("select", {
+                        value: currentCurationTier,
+                        onChange: (ev) => handleAdminSwitchTier(ev.target.value),
+                        style: { width: "100%", padding: "8px", borderRadius: "6px", border: "1px solid #cbd5e0", fontSize: "13px", outline: "none", background: "white", cursor: "pointer" }
+                      },
+                        e("option", { value: "NONE" }, "Build-Your-Own Box (Recurring BYOB)"),
+                        e("option", { value: "STARTER" }, "STARTER Box ($30/mo)"),
+                        e("option", { value: "PRO" }, "PRO Box ($60/mo)"),
+                        e("option", { value: "ENTERPRISE" }, "ENTERPRISE Box ($120/mo)")
+                      )
+                    ),
+
+                    deliveredProductIds.length > 0 && e("div", { style: { marginBottom: "16px" } },
+                      e("div", { style: { fontSize: "11px", fontWeight: "bold", color: "#6d7175", textTransform: "uppercase", marginBottom: "6px" } }, "📜 Skincare Box Delivery History"),
+                      e("p", { style: { color: "#6d7175", fontSize: "11px", margin: "0 0 8px 0", lineHeight: "1.4" } }, "AI anti-repeat saturation decay is active. The curation engine automatically penalizes and avoids suggesting these historically received product variants consecutively:"),
+                      e("div", { style: { border: "1px solid #e1e3e5", borderRadius: "6px", backgroundColor: "#fafbfb", padding: "8px", maxHeight: "120px", overflowY: "auto" } },
+                        deliveredProductIds.map((pId, idx) => {
+                          const matchingProd = inventory.find(x => x.productId === pId);
+                          const prodName = matchingProd ? formatProductName(matchingProd.productName) : formatProductName(pId);
+                          return e("div", { key: idx, style: { fontSize: "11px", color: "#4a5568", padding: "4px 0", borderBottom: idx < deliveredProductIds.length - 1 ? "1px solid #edf2f7" : "none", display: "flex", alignItems: "center", gap: "6px" } },
+                            e("span", { style: { fontSize: "12px" } }, "📦"),
+                            e("span", null, prodName),
+                            e("span", { className: "badge badge-loyal", style: { fontSize: "8px", padding: "1px 4px", marginLeft: "auto", background: "#ebf8ff", color: "#2b6cb0", borderColor: "#bee3f8" } }, "Delivered ✓")
+                          );
+                        })
+                      )
                     )
                   );
                 })(),
@@ -7994,6 +8073,39 @@ app.get("/", (req, res) => {
                 min: "0", 
                 value: adminMinStartDateDays, 
                 onChange: (ev) => setAdminMinStartDateDays(ev.target.value), 
+                style: { width: "100%", padding: "10px", borderRadius: "6px", border: "1px solid #cbd5e0", fontSize: "13px", outline: "none", boxSizing: "border-box" } 
+              })
+            )
+          ),
+
+          e("div", { style: { display: "flex", gap: "24px", flexWrap: "wrap", alignItems: "center", marginBottom: "16px", borderTop: "1px dashed #cbd5e0", paddingTop: "12px" } },
+            e("div", { style: { minWidth: "180px", flex: 1 } },
+              e("label", { style: { display: "block", fontSize: "12px", fontWeight: "bold", color: "#4a5568", marginBottom: "6px" } }, "Starter Max Product Value Cap ($)"),
+              e("input", { 
+                type: "number", 
+                min: "1", 
+                value: adminStarterCap, 
+                onChange: (ev) => setAdminStarterCap(ev.target.value), 
+                style: { width: "100%", padding: "10px", borderRadius: "6px", border: "1px solid #cbd5e0", fontSize: "13px", outline: "none", boxSizing: "border-box" } 
+              })
+            ),
+            e("div", { style: { minWidth: "180px", flex: 1 } },
+              e("label", { style: { display: "block", fontSize: "12px", fontWeight: "bold", color: "#4a5568", marginBottom: "6px" } }, "Pro Max Product Value Cap ($)"),
+              e("input", { 
+                type: "number", 
+                min: "1", 
+                value: adminProCap, 
+                onChange: (ev) => setAdminProCap(ev.target.value), 
+                style: { width: "100%", padding: "10px", borderRadius: "6px", border: "1px solid #cbd5e0", fontSize: "13px", outline: "none", boxSizing: "border-box" } 
+              })
+            ),
+            e("div", { style: { minWidth: "180px", flex: 1 } },
+              e("label", { style: { display: "block", fontSize: "12px", fontWeight: "bold", color: "#4a5568", marginBottom: "6px" } }, "Enterprise Max Product Value Cap ($)"),
+              e("input", { 
+                type: "number", 
+                min: "1", 
+                value: adminEnterpriseCap, 
+                onChange: (ev) => setAdminEnterpriseCap(ev.target.value), 
                 style: { width: "100%", padding: "10px", borderRadius: "6px", border: "1px solid #cbd5e0", fontSize: "13px", outline: "none", boxSizing: "border-box" } 
               })
             )
