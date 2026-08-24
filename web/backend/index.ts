@@ -1103,7 +1103,7 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
       if (profile) {
         const type = allConfigs && allConfigs[contract.shop] ? allConfigs[contract.shop].promoType : "MANUAL";
         if (type === "TENURE") {
-          const tenure = profile.subscription?.tenureMonths || 1;
+          const tenure = (profile as any).subscription?.tenureMonths || 1;
           const threshold = allConfigs && allConfigs[contract.shop] ? parseInt(allConfigs[contract.shop].tenureThresholdMonths || "6") : 6;
           const bonus = allConfigs && allConfigs[contract.shop] ? parseInt(allConfigs[contract.shop].tenureBonusLimit || "1") : 1;
           if (tenure >= threshold) {
@@ -1200,7 +1200,7 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
       if (profile) {
         const type = allConfigs && allConfigs[contract.shop] ? allConfigs[contract.shop].promoType : "MANUAL";
         if (type === "TENURE") {
-          const tenure = profile.subscription?.tenureMonths || 1;
+          const tenure = (profile as any).subscription?.tenureMonths || 1;
           const threshold = allConfigs && allConfigs[contract.shop] ? parseInt(allConfigs[contract.shop].tenureThresholdMonths || "6") : 6;
           const bonus = allConfigs && allConfigs[contract.shop] ? parseInt(allConfigs[contract.shop].tenureBonusLimit || "1") : 1;
           if (tenure >= threshold) {
@@ -1837,6 +1837,30 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
         }
       }
 
+      // Calculate dynamic max addon limit on the backend!
+      let dynamicMaxLimit = maxAddonLimit;
+      if (profile) {
+        const type = allConfigs && allConfigs[shop] ? allConfigs[shop].promoType : "MANUAL";
+        if (type === "TENURE") {
+          const tenure = (profile as any).subscription?.tenureMonths || 1;
+          const threshold = allConfigs && allConfigs[shop] ? parseInt(allConfigs[shop].tenureThresholdMonths || "6") : 6;
+          const bonus = allConfigs && allConfigs[shop] ? parseInt(allConfigs[shop].tenureBonusLimit || "1") : 1;
+          if (tenure >= threshold) {
+            dynamicMaxLimit = maxAddonLimit + bonus;
+          }
+        } else if (type === "CAMPAIGN") {
+          const startStr = allConfigs && allConfigs[shop] ? allConfigs[shop].campaignStartDate : "";
+          const endStr = allConfigs && allConfigs[shop] ? allConfigs[shop].campaignEndDate : "";
+          const start = new Date(startStr || "");
+          const end = new Date(endStr || "");
+          const now = new Date();
+          if (!isNaN(start.getTime()) && !isNaN(end.getTime()) && now >= start && now <= end) {
+            const bonus = allConfigs && allConfigs[shop] ? parseInt(allConfigs[shop].campaignBonusLimit || "2") : 2;
+            dynamicMaxLimit = maxAddonLimit + bonus;
+          }
+        }
+      }
+
       // Load Milestone and surprise unboxing rewards settings dynamically
       const dbSessionRecord = await prisma.session.findFirst({ where: { shop } });
       const milestoneCount = dbSessionRecord?.milestoneOrderCount || 3;
@@ -2398,35 +2422,12 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
       // Cancellation Interception Save Flow state
       const [showCancellationSaveFlow, setShowCancellationSaveFlow] = React.useState(false);
       
-      let dynamicMaxLimit = maxAddonLimit;
-      if (profile) {
-        const type = allConfigs && allConfigs[shop] ? allConfigs[shop].promoType : "MANUAL";
-        if (type === "TENURE") {
-          const tenure = profile.subscription?.tenureMonths || 1;
-          const threshold = allConfigs && allConfigs[shop] ? parseInt(allConfigs[shop].tenureThresholdMonths || "6") : 6;
-          const bonus = allConfigs && allConfigs[shop] ? parseInt(allConfigs[shop].tenureBonusLimit || "1") : 1;
-          if (tenure >= threshold) {
-            dynamicMaxLimit = maxAddonLimit + bonus;
-          }
-        } else if (type === "CAMPAIGN") {
-          const startStr = allConfigs && allConfigs[shop] ? allConfigs[shop].campaignStartDate : "";
-          const endStr = allConfigs && allConfigs[shop] ? allConfigs[shop].campaignEndDate : "";
-          const start = new Date(startStr || "");
-          const end = new Date(endStr || "");
-          const now = new Date();
-          if (!isNaN(start.getTime()) && !isNaN(end.getTime()) && now >= start && now <= end) {
-            const bonus = allConfigs && allConfigs[shop] ? parseInt(allConfigs[shop].campaignBonusLimit || "2") : 2;
-            dynamicMaxLimit = maxAddonLimit + bonus;
-          }
-        }
-      }
-
       const milestoneCount = ${milestoneCount};
       const eligibleGifts = ${JSON.stringify(giftIds)};
       const discountProfiles = ${JSON.stringify(discountProfiles)};
       const eligibleAddons = ${JSON.stringify(eligibleAddonVariantIds)};
       const vipRedemptions = ${JSON.stringify(vipRedemptions)};
-      const maxAddonLimit = dynamicMaxLimit;
+      const maxAddonLimit = ${dynamicMaxLimit};
 
       const [selectedGiftId, setSelectedGiftId] = React.useState("");
       const [claimingGift, setClaimingGift] = React.useState(false);
