@@ -5887,6 +5887,7 @@ app.get("/", (req, res) => {
       const [portalContract, setPortalContract] = React.useState(null);
       const [adminEditingItems, setAdminEditingItems] = React.useState([]);
       const [adminIsEditing, setAdminIsEditing] = React.useState(false);
+      const [activating, setActivating] = React.useState(false);
       const [selectedPortalCustomerId, setSelectedPortalCustomerId] = React.useState("");
       const [adminSelectedVariants, setAdminSelectedVariants] = React.useState([]);
       const [adminFrequency, setAdminFrequency] = React.useState(30);
@@ -6462,7 +6463,8 @@ app.get("/", (req, res) => {
           e("div", { className: "tab " + (activeTab === "inventory" ? "active" : ""), onClick: () => setActiveTab("inventory") }, "📊 Inventory Analytics"),
           e("div", { className: "tab " + (activeTab === "quiz" ? "active" : ""), onClick: () => setActiveTab("quiz") }, "📋 Subscription Preference Quiz"),
           e("div", { className: "tab " + (activeTab === "milestones" ? "active" : ""), onClick: () => setActiveTab("milestones") }, "🎁 Milestones & Gifting"),
-          e("div", { className: "tab " + (activeTab === "portal" ? "active" : ""), onClick: () => setActiveTab("portal") }, "📱 The Glow Portal & GlowBot")
+          e("div", { className: "tab " + (activeTab === "portal" ? "active" : ""), onClick: () => setActiveTab("portal") }, "📱 The Glow Portal & GlowBot"),
+          e("div", { className: "tab " + (activeTab === "settings" ? "active" : ""), onClick: () => setActiveTab("settings") }, "⚙️ Portal Settings")
           );
       };
 
@@ -7821,228 +7823,229 @@ app.get("/", (req, res) => {
                 )
               )
             )
-          ),
+          )
+        );
+      };
+
+      const renderSettingsTab = () => {
+        return e("div", { className: "card" },
+          e("h3", { style: { fontSize: "16px", fontWeight: "600", marginBottom: "8px", display: "flex", alignItems: "center" } }, "🎨 Customer Glow Portal Theme Branding & Limits"),
+          e("p", { style: { color: "#6d7175", fontSize: "13px", marginBottom: "16px" } }, "Configure custom primary and secondary brand styling colors and limit constraints globally per subscriber box."),
           
-          // Theme settings card
-          e("div", { className: "card", style: { marginTop: "20px" } },
-            e("h3", { style: { fontSize: "16px", fontWeight: "600", marginBottom: "8px", display: "flex", alignItems: "center" } }, "🎨 Customer Glow Portal Theme Branding & Limits"),
-            e("p", { style: { color: "#6d7175", fontSize: "13px", marginBottom: "16px" } }, "Configure custom primary and secondary brand styling colors and limit constraints globally per subscriber box."),
+          e("div", { style: { display: "flex", gap: "24px", flexWrap: "wrap", alignItems: "center", marginBottom: "16px" } },
+            e("div", null,
+              e("label", { style: { display: "block", fontSize: "12px", fontWeight: "bold", color: "#4a5568", marginBottom: "6px" } }, "Primary Brand Color"),
+              e("div", { style: { display: "flex", alignItems: "center", gap: "8px" } },
+                e("input", { type: "color", value: adminThemePrimary, onChange: (ev) => setAdminThemePrimary(ev.target.value), style: { width: "40px", height: "40px", border: "1px solid #cbd5e0", borderRadius: "6px", cursor: "pointer", padding: 0 } }),
+                e("span", { style: { fontSize: "13px", fontFamily: "monospace", fontWeight: "bold" } }, adminThemePrimary)
+              )
+            ),
+            e("div", null,
+              e("label", { style: { display: "block", fontSize: "12px", fontWeight: "bold", color: "#4a5568", marginBottom: "6px" } }, "Secondary Brand Color"),
+              e("div", { style: { display: "flex", alignItems: "center", gap: "8px" } },
+                e("input", { type: "color", value: adminThemeSecondary, onChange: (ev) => setAdminThemeSecondary(ev.target.value), style: { width: "40px", height: "40px", border: "1px solid #cbd5e0", borderRadius: "6px", cursor: "pointer", padding: 0 } }),
+                e("span", { style: { fontSize: "13px", fontFamily: "monospace", fontWeight: "bold" } }, adminThemeSecondary)
+              )
+            ),
+            e("div", { style: { minWidth: "180px" } },
+              e("label", { style: { display: "block", fontSize: "12px", fontWeight: "bold", color: "#4a5568", marginBottom: "6px" } }, "Max Add-ons Per Subscriber"),
+              e("input", { 
+                type: "number", 
+                min: "1", 
+                value: adminMaxAddonLimit, 
+                onChange: (ev) => setAdminMaxAddonLimit(ev.target.value), 
+                style: { width: "100%", padding: "10px", borderRadius: "6px", border: "1px solid #cbd5e0", fontSize: "13px", outline: "none", boxSizing: "border-box" } 
+              })
+            ),
+            e("div", { style: { minWidth: "180px" } },
+              e("label", { style: { display: "block", fontSize: "12px", fontWeight: "bold", color: "#4a5568", marginBottom: "6px" } }, "Min Days to Start Shipment"),
+              e("input", { 
+                type: "number", 
+                min: "0", 
+                value: adminMinStartDateDays, 
+                onChange: (ev) => setAdminMinStartDateDays(ev.target.value), 
+                style: { width: "100%", padding: "10px", borderRadius: "6px", border: "1px solid #cbd5e0", fontSize: "13px", outline: "none", boxSizing: "border-box" } 
+              })
+            )
+          ),
+
+          // Exposing Promotional Campaigns & Dynamic Gating Rules configurator
+          e("div", { style: { borderTop: "1px solid #cbd5e0", paddingTop: "16px", marginBottom: "20px" } },
+            e("h4", { style: { fontSize: "14px", fontWeight: "600", color: "#2c3e50", marginBottom: "8px" } }, "✨ Configure Promotional Campaigns & Dynamic Gating Rules"),
+            e("p", { style: { color: "#6d7175", fontSize: "12px", marginBottom: "12px" } }, "Supercharge customer loyalty! Choose how to run box promotions and dynamically adjust maximum subscriber add-on limits."),
             
-            e("div", { style: { display: "flex", gap: "24px", flexWrap: "wrap", alignItems: "center", marginBottom: "16px" } },
-              e("div", null,
-                e("label", { style: { display: "block", fontSize: "12px", fontWeight: "bold", color: "#4a5568", marginBottom: "6px" } }, "Primary Brand Color"),
-                e("div", { style: { display: "flex", alignItems: "center", gap: "8px" } },
-                  e("input", { type: "color", value: adminThemePrimary, onChange: (ev) => setAdminThemePrimary(ev.target.value), style: { width: "40px", height: "40px", border: "1px solid #cbd5e0", borderRadius: "6px", cursor: "pointer", padding: 0 } }),
-                  e("span", { style: { fontSize: "13px", fontFamily: "monospace", fontWeight: "bold" } }, adminThemePrimary)
+            e("div", { style: { display: "flex", gap: "16px", flexWrap: "wrap", marginBottom: "12px", alignItems: "center" } },
+              e("div", { style: { minWidth: "240px", flex: 1 } },
+                e("label", { style: { display: "block", fontSize: "11px", fontWeight: "bold", color: "#4a5568", marginBottom: "6px" } }, "Active Promo Mode"),
+                e("select", {
+                  value: adminPromoType,
+                  onChange: (ev) => setAdminPromoType(ev.target.value),
+                  style: { width: "100%", padding: "10px", borderRadius: "6px", border: "1px solid #cbd5e0", fontSize: "13px", outline: "none", cursor: "pointer", background: "white" }
+                },
+                  e("option", { value: "MANUAL" }, "Manual Shop-Wide Limits (No Campaign)"),
+                  e("option", { value: "TENURE" }, "Loyalty Tenure-Based Unlocks (Reward Long-Term Subscribers)"),
+                  e("option", { value: "CAMPAIGN" }, "Automated Campaign Flash Events (Black Friday / Holidays)")
                 )
-              ),
-              e("div", null,
-                e("label", { style: { display: "block", fontSize: "12px", fontWeight: "bold", color: "#4a5568", marginBottom: "6px" } }, "Secondary Brand Color"),
-                e("div", { style: { display: "flex", alignItems: "center", gap: "8px" } },
-                  e("input", { type: "color", value: adminThemeSecondary, onChange: (ev) => setAdminThemeSecondary(ev.target.value), style: { width: "40px", height: "40px", border: "1px solid #cbd5e0", borderRadius: "6px", cursor: "pointer", padding: 0 } }),
-                  e("span", { style: { fontSize: "13px", fontFamily: "monospace", fontWeight: "bold" } }, adminThemeSecondary)
-                )
-              ),
-              e("div", { style: { minWidth: "180px" } },
-                e("label", { style: { display: "block", fontSize: "12px", fontWeight: "bold", color: "#4a5568", marginBottom: "6px" } }, "Max Add-ons Per Subscriber"),
-                e("input", { 
-                  type: "number", 
-                  min: "1", 
-                  value: adminMaxAddonLimit, 
-                  onChange: (ev) => setAdminMaxAddonLimit(ev.target.value), 
-                  style: { width: "100%", padding: "10px", borderRadius: "6px", border: "1px solid #cbd5e0", fontSize: "13px", outline: "none", boxSizing: "border-box" } 
+              )
+            ),
+
+            adminPromoType === "TENURE" && e("div", { style: { background: "#f7fafc", border: "1px solid #e2e8f0", padding: "12px", borderRadius: "6px", display: "flex", gap: "16px", flexWrap: "wrap", marginBottom: "12px" } },
+              e("div", { style: { minWidth: "160px", flex: 1 } },
+                e("label", { style: { display: "block", fontSize: "11px", fontWeight: "bold", color: "#4a5568", marginBottom: "6px" } }, "Loyalty Tenure Threshold (Months)"),
+                e("input", {
+                  type: "number",
+                  min: "1",
+                  value: adminTenureThreshold,
+                  onChange: (ev) => setAdminTenureThreshold(ev.target.value),
+                  style: { width: "100%", padding: "8px", borderRadius: "4px", border: "1px solid #cbd5e0", fontSize: "12px" }
                 })
               ),
-              e("div", { style: { minWidth: "180px" } },
-                e("label", { style: { display: "block", fontSize: "12px", fontWeight: "bold", color: "#4a5568", marginBottom: "6px" } }, "Min Days to Start Shipment"),
-                e("input", { 
-                  type: "number", 
-                  min: "0", 
-                  value: adminMinStartDateDays, 
-                  onChange: (ev) => setAdminMinStartDateDays(ev.target.value), 
-                  style: { width: "100%", padding: "10px", borderRadius: "6px", border: "1px solid #cbd5e0", fontSize: "13px", outline: "none", boxSizing: "border-box" } 
+              e("div", { style: { minWidth: "160px", flex: 1 } },
+                e("label", { style: { display: "block", fontSize: "11px", fontWeight: "bold", color: "#4a5568", marginBottom: "6px" } }, "Bonus Add-on Slots Granted"),
+                e("input", {
+                  type: "number",
+                  min: "1",
+                  value: adminTenureBonus,
+                  onChange: (ev) => setAdminTenureBonus(ev.target.value),
+                  style: { width: "100%", padding: "8px", borderRadius: "4px", border: "1px solid #cbd5e0", fontSize: "12px" }
                 })
               )
             ),
 
-            // Exposing Promotional Campaigns & Dynamic Gating Rules configurator
-            e("div", { style: { borderTop: "1px solid #cbd5e0", paddingTop: "16px", marginBottom: "20px" } },
-              e("h4", { style: { fontSize: "14px", fontWeight: "600", color: "#2c3e50", marginBottom: "8px" } }, "✨ Configure Promotional Campaigns & Dynamic Gating Rules"),
-              e("p", { style: { color: "#6d7175", fontSize: "12px", marginBottom: "12px" } }, "Supercharge customer loyalty! Choose how to run box promotions and dynamically adjust maximum subscriber add-on limits."),
-              
-              e("div", { style: { display: "flex", gap: "16px", flexWrap: "wrap", marginBottom: "12px", alignItems: "center" } },
-                e("div", { style: { minWidth: "240px", flex: 1 } },
-                  e("label", { style: { display: "block", fontSize: "11px", fontWeight: "bold", color: "#4a5568", marginBottom: "6px" } }, "Active Promo Mode"),
-                  e("select", {
-                    value: adminPromoType,
-                    onChange: (ev) => setAdminPromoType(ev.target.value),
-                    style: { width: "100%", padding: "10px", borderRadius: "6px", border: "1px solid #cbd5e0", fontSize: "13px", outline: "none", cursor: "pointer", background: "white" }
-                  },
-                    e("option", { value: "MANUAL" }, "Manual Shop-Wide Limits (No Campaign)"),
-                    e("option", { value: "TENURE" }, "Loyalty Tenure-Based Unlocks (Reward Long-Term Subscribers)"),
-                    e("option", { value: "CAMPAIGN" }, "Automated Campaign Flash Events (Black Friday / Holidays)")
-                  )
-                )
-              ),
-
-              adminPromoType === "TENURE" && e("div", { style: { background: "#f7fafc", border: "1px solid #e2e8f0", padding: "12px", borderRadius: "6px", display: "flex", gap: "16px", flexWrap: "wrap", marginBottom: "12px" } },
-                e("div", { style: { minWidth: "160px", flex: 1 } },
-                  e("label", { style: { display: "block", fontSize: "11px", fontWeight: "bold", color: "#4a5568", marginBottom: "6px" } }, "Loyalty Tenure Threshold (Months)"),
+            adminPromoType === "CAMPAIGN" && e("div", { style: { background: "#fffaf0", border: "1px solid #feebc8", padding: "12px", borderRadius: "6px", display: "flex", flexDirection: "column", gap: "12px", marginBottom: "12px" } },
+              e("div", { style: { display: "flex", gap: "16px", flexWrap: "wrap" } },
+                e("div", { style: { minWidth: "200px", flex: 1.5 } },
+                  e("label", { style: { display: "block", fontSize: "11px", fontWeight: "bold", color: "#4a5568", marginBottom: "6px" } }, "Promo Campaign Name"),
                   e("input", {
-                    type: "number",
-                    min: "1",
-                    value: adminTenureThreshold,
-                    onChange: (ev) => setAdminTenureThreshold(ev.target.value),
-                    style: { width: "100%", padding: "8px", borderRadius: "4px", border: "1px solid #cbd5e0", fontSize: "12px" }
+                    type: "text",
+                    value: adminCampaignName,
+                    onChange: (ev) => setAdminCampaignName(ev.target.value),
+                    style: { width: "100%", padding: "8px", borderRadius: "4px", border: "1px solid #cbd5e0", fontSize: "12px", boxSizing: "border-box" }
                   })
                 ),
-                e("div", { style: { minWidth: "160px", flex: 1 } },
-                  e("label", { style: { display: "block", fontSize: "11px", fontWeight: "bold", color: "#4a5568", marginBottom: "6px" } }, "Bonus Add-on Slots Granted"),
+                e("div", { style: { minWidth: "120px", flex: 0.8 } },
+                  e("label", { style: { display: "block", fontSize: "11px", fontWeight: "bold", color: "#4a5568", marginBottom: "6px" } }, "Campaign Bonus Slots"),
                   e("input", {
                     type: "number",
                     min: "1",
-                    value: adminTenureBonus,
-                    onChange: (ev) => setAdminTenureBonus(ev.target.value),
+                    value: adminCampaignBonus,
+                    onChange: (ev) => setAdminCampaignBonus(ev.target.value),
                     style: { width: "100%", padding: "8px", borderRadius: "4px", border: "1px solid #cbd5e0", fontSize: "12px" }
                   })
                 )
               ),
-
-              adminPromoType === "CAMPAIGN" && e("div", { style: { background: "#fffaf0", border: "1px solid #feebc8", padding: "12px", borderRadius: "6px", display: "flex", flexDirection: "column", gap: "12px", marginBottom: "12px" } },
-                e("div", { style: { display: "flex", gap: "16px", flexWrap: "wrap" } },
-                  e("div", { style: { minWidth: "200px", flex: 1.5 } },
-                    e("label", { style: { display: "block", fontSize: "11px", fontWeight: "bold", color: "#4a5568", marginBottom: "6px" } }, "Promo Campaign Name"),
-                    e("input", {
-                      type: "text",
-                      value: adminCampaignName,
-                      onChange: (ev) => setAdminCampaignName(ev.target.value),
-                      style: { width: "100%", padding: "8px", borderRadius: "4px", border: "1px solid #cbd5e0", fontSize: "12px", boxSizing: "border-box" }
-                    })
-                  ),
-                  e("div", { style: { minWidth: "120px", flex: 0.8 } },
-                    e("label", { style: { display: "block", fontSize: "11px", fontWeight: "bold", color: "#4a5568", marginBottom: "6px" } }, "Campaign Bonus Slots"),
-                    e("input", {
-                      type: "number",
-                      min: "1",
-                      value: adminCampaignBonus,
-                      onChange: (ev) => setAdminCampaignBonus(ev.target.value),
-                      style: { width: "100%", padding: "8px", borderRadius: "4px", border: "1px solid #cbd5e0", fontSize: "12px" }
-                    })
-                  )
+              e("div", { style: { display: "flex", gap: "16px", flexWrap: "wrap" } },
+                e("div", { style: { minWidth: "160px", flex: 1 } },
+                  e("label", { style: { display: "block", fontSize: "11px", fontWeight: "bold", color: "#4a5568", marginBottom: "6px" } }, "Campaign Start Date"),
+                  e("input", {
+                    type: "date",
+                    value: adminCampaignStart,
+                    onChange: (ev) => setAdminCampaignStart(ev.target.value),
+                    style: { width: "100%", padding: "8px", borderRadius: "4px", border: "1px solid #cbd5e0", fontSize: "12px", boxSizing: "border-box" }
+                  })
                 ),
-                e("div", { style: { display: "flex", gap: "16px", flexWrap: "wrap" } },
-                  e("div", { style: { minWidth: "160px", flex: 1 } },
-                    e("label", { style: { display: "block", fontSize: "11px", fontWeight: "bold", color: "#4a5568", marginBottom: "6px" } }, "Campaign Start Date"),
-                    e("input", {
-                      type: "date",
-                      value: adminCampaignStart,
-                      onChange: (ev) => setAdminCampaignStart(ev.target.value),
-                      style: { width: "100%", padding: "8px", borderRadius: "4px", border: "1px solid #cbd5e0", fontSize: "12px", boxSizing: "border-box" }
-                    })
-                  ),
-                  e("div", { style: { minWidth: "160px", flex: 1 } },
-                    e("label", { style: { display: "block", fontSize: "11px", fontWeight: "bold", color: "#4a5568", marginBottom: "6px" } }, "Campaign End Date"),
-                    e("input", {
-                      type: "date",
-                      value: adminCampaignEnd,
-                      onChange: (ev) => setAdminCampaignEnd(ev.target.value),
-                      style: { width: "100%", padding: "8px", borderRadius: "4px", border: "1px solid #cbd5e0", fontSize: "12px", boxSizing: "border-box" }
-                    })
-                  )
+                e("div", { style: { minWidth: "160px", flex: 1 } },
+                  e("label", { style: { display: "block", fontSize: "11px", fontWeight: "bold", color: "#4a5568", marginBottom: "6px" } }, "Campaign End Date"),
+                  e("input", {
+                    type: "date",
+                    value: adminCampaignEnd,
+                    onChange: (ev) => setAdminCampaignEnd(ev.target.value),
+                    style: { width: "100%", padding: "8px", borderRadius: "4px", border: "1px solid #cbd5e0", fontSize: "12px", boxSizing: "border-box" }
+                  })
                 )
               )
-            ),
+            )
+          ),
 
-            // Exposing Custom Routine Box Step Labels Configuration (The visual empty slot guides!)
-            e("div", { style: { borderTop: "1px solid #cbd5e0", paddingTop: "16px", marginBottom: "20px" } },
-              e("h4", { style: { fontSize: "14px", fontWeight: "600", color: "#2c3e50", marginBottom: "8px" } }, "📦 Configure Custom Routine Box Step Labels"),
-              e("p", { style: { color: "#6d7175", fontSize: "12px", marginBottom: "12px" } }, "Customize the visual routine guides rendered inside the empty subscription slots in the storefront portal (e.g. Step 1, Step 2, Step 3)."),
-              e("div", { style: { display: "flex", gap: "12px", flexWrap: "wrap" } },
-                [0, 1, 2].map(stepIdx => {
-                  const labelVal = adminSlotLabels[stepIdx] || "";
-                  const handleLabelChange = (ev) => {
-                    const copy = [...adminSlotLabels];
-                    copy[stepIdx] = ev.target.value;
-                    setAdminSlotLabels(copy);
-                  };
+          // Exposing Custom Routine Box Step Labels Configuration (The visual empty slot guides!)
+          e("div", { style: { borderTop: "1px solid #cbd5e0", paddingTop: "16px", marginBottom: "20px" } },
+            e("h4", { style: { fontSize: "14px", fontWeight: "600", color: "#2c3e50", marginBottom: "8px" } }, "📦 Configure Custom Routine Box Step Labels"),
+            e("p", { style: { color: "#6d7175", fontSize: "12px", marginBottom: "12px" } }, "Customize the visual routine guides rendered inside the empty subscription slots in the storefront portal (e.g. Step 1, Step 2, Step 3)."),
+            e("div", { style: { display: "flex", gap: "12px", flexWrap: "wrap" } },
+              [0, 1, 2].map(stepIdx => {
+                const labelVal = adminSlotLabels[stepIdx] || "";
+                const handleLabelChange = (ev) => {
+                  const copy = [...adminSlotLabels];
+                  copy[stepIdx] = ev.target.value;
+                  setAdminSlotLabels(copy);
+                };
 
-                  return e("div", { key: stepIdx, style: { flex: 1, minWidth: "160px" } },
-                    e("label", { style: { display: "block", fontSize: "11px", fontWeight: "bold", color: "#4a5568", marginBottom: "6px" } }, 'Step ' + (stepIdx + 1) + ' Slot Label'),
-                    e("input", { 
-                      type: "text", 
-                      value: labelVal, 
-                      onChange: handleLabelChange, 
-                      placeholder: 'e.g. Step ' + (stepIdx + 1) + ' Cleanser...', 
-                      style: { width: "100%", padding: "10px", borderRadius: "6px", border: "1px solid #cbd5e0", fontSize: "13px", outline: "none", boxSizing: "border-box" } 
-                    })
-                  );
-                })
-              )
-            ),
+                return e("div", { key: stepIdx, style: { flex: 1, minWidth: "160px" } },
+                  e("label", { style: { display: "block", fontSize: "11px", fontWeight: "bold", color: "#4a5568", marginBottom: "6px" } }, "Step " + (stepIdx + 1) + " Slot Label"),
+                  e("input", { 
+                    type: "text", 
+                    value: labelVal, 
+                    onChange: handleLabelChange, 
+                    placeholder: "e.g. Step " + (stepIdx + 1) + " Cleanser...", 
+                    style: { width: "100%", padding: "10px", borderRadius: "6px", border: "1px solid #cbd5e0", fontSize: "13px", outline: "none", boxSizing: "border-box" } 
+                  })
+                );
+              })
+            )
+          ),
 
-            // Exposing Allowed Add-Ons Catalog Selection checklist
-            e("div", { style: { borderTop: "1px solid #cbd5e0", paddingTop: "16px", marginBottom: "20px" } },
-              e("h4", { style: { fontSize: "14px", fontWeight: "600", color: "#2c3e50", marginBottom: "8px" } }, "🛍️ Configure Allowed Subscription Add-Ons Catalog"),
-              e("p", { style: { color: "#6d7175", fontSize: "12px", marginBottom: "12px" } }, "Choose which product variants from your live Shopify catalog are permitted for one-time subscription add-ons inside visual cart slots and chatbots."),
-              e("div", { style: { maxHeight: "200px", overflowY: "auto", border: "1px solid #e1e3e5", padding: "10px", borderRadius: "4px", backgroundColor: "#fafbfb" } },
-                inventory.map((item, idx) => {
-                  const isChecked = adminAddons.includes(item.productId);
-                  return e("div", { key: idx, style: { display: "flex", alignItems: "center", marginBottom: "10px" } },
+          // Exposing Allowed Add-Ons Catalog Selection checklist
+          e("div", { style: { borderTop: "1px solid #cbd5e0", paddingTop: "16px", marginBottom: "20px" } },
+            e("h4", { style: { fontSize: "14px", fontWeight: "600", color: "#2c3e50", marginBottom: "8px" } }, "🛍️ Configure Allowed Subscription Add-Ons Catalog"),
+            e("p", { style: { color: "#6d7175", fontSize: "12px", marginBottom: "12px" } }, "Choose which product variants from your live Shopify catalog are permitted for one-time subscription add-ons inside visual cart slots and chatbots."),
+            e("div", { style: { maxHeight: "200px", overflowY: "auto", border: "1px solid #e1e3e5", padding: "10px", borderRadius: "4px", backgroundColor: "#fafbfb" } },
+              inventory.map((item, idx) => {
+                const isChecked = adminAddons.includes(item.productId);
+                return e("div", { key: idx, style: { display: "flex", alignItems: "center", marginBottom: "10px" } },
+                  e("input", { 
+                    type: "checkbox", 
+                    id: "addon_" + idx, 
+                    checked: isChecked, 
+                    onChange: () => handleAddonToggle(item.productId),
+                    style: { marginRight: "10px" } 
+                  }),
+                  e("label", { htmlFor: "addon_" + idx, style: { cursor: "pointer", fontSize: "13px" } }, 
+                    formatProductName(item.productName || item.productId)
+                  )
+                );
+              })
+            )
+          ),
+
+          // Exposing Allowed VIP Redemptions Points Catalog Mapping
+          e("div", { style: { borderTop: "1px solid #cbd5e0", paddingTop: "16px", marginBottom: "20px" } },
+            e("h4", { style: { fontSize: "14px", fontWeight: "600", color: "#2c3e50", marginBottom: "8px" } }, "✨ Configure Glow Points VIP Redemptions Catalog"),
+            e("p", { style: { color: "#6d7175", fontSize: "12px", marginBottom: "12px" } }, "Select which products are eligible for loyalty points redemption, and specify their points values."),
+            e("div", { style: { maxHeight: "200px", overflowY: "auto", border: "1px solid #e1e3e5", padding: "10px", borderRadius: "4px", backgroundColor: "#fafbfb" } },
+              inventory.map((item, idx) => {
+                const vipItem = adminVipRedemptions.find(x => x.variantId === item.productId);
+                const isChecked = !!vipItem;
+                const pointsVal = vipItem ? vipItem.points : Math.max(10, Math.round((item.price || 30.0) * 1.5));
+                
+                return e("div", { key: idx, style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "10px" } },
+                  e("div", { style: { display: "flex", alignItems: "center" } },
                     e("input", { 
                       type: "checkbox", 
-                      id: "addon_" + idx, 
+                      id: "vip_" + idx, 
                       checked: isChecked, 
-                      onChange: () => handleAddonToggle(item.productId),
+                      onChange: () => handleVipToggle(item.productId),
                       style: { marginRight: "10px" } 
                     }),
-                    e("label", { htmlFor: "addon_" + idx, style: { cursor: "pointer", fontSize: "13px" } }, 
+                    e("label", { htmlFor: "vip_" + idx, style: { cursor: "pointer", fontSize: "13px" } }, 
                       formatProductName(item.productName || item.productId)
                     )
-                  );
-                })
-              )
-            ),
+                  ),
+                  isChecked && e("div", { style: { display: "flex", alignItems: "center", gap: "6px" } },
+                    e("span", { style: { fontSize: "11px", color: "#4a5568" } }, "Points Required:"),
+                    e("input", { 
+                      type: "number", 
+                      min: "1", 
+                      value: pointsVal, 
+                      onChange: (ev) => handleVipPointsChange(item.productId, ev.target.value), 
+                      style: { width: "70px", padding: "4px 8px", borderRadius: "4px", border: "1px solid #cbd5e0", fontSize: "12px", textAlign: "right" } 
+                    })
+                  )
+                );
+              })
+            )
+          ),
 
-            // Exposing Allowed VIP Redemptions Points Catalog Mapping
-            e("div", { style: { borderTop: "1px solid #cbd5e0", paddingTop: "16px", marginBottom: "20px" } },
-              e("h4", { style: { fontSize: "14px", fontWeight: "600", color: "#2c3e50", marginBottom: "8px" } }, "✨ Configure Glow Points VIP Redemptions Catalog"),
-              e("p", { style: { color: "#6d7175", fontSize: "12px", marginBottom: "12px" } }, "Select which products are eligible for loyalty points redemption, and specify their points values."),
-              e("div", { style: { maxHeight: "200px", overflowY: "auto", border: "1px solid #e1e3e5", padding: "10px", borderRadius: "4px", backgroundColor: "#fafbfb" } },
-                inventory.map((item, idx) => {
-                  const vipItem = adminVipRedemptions.find(x => x.variantId === item.productId);
-                  const isChecked = !!vipItem;
-                  const pointsVal = vipItem ? vipItem.points : Math.max(10, Math.round((item.price || 30.0) * 1.5));
-                  
-                  return e("div", { key: idx, style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "10px" } },
-                    e("div", { style: { display: "flex", alignItems: "center" } },
-                      e("input", { 
-                        type: "checkbox", 
-                        id: "vip_" + idx, 
-                        checked: isChecked, 
-                        onChange: () => handleVipToggle(item.productId),
-                        style: { marginRight: "10px" } 
-                      }),
-                      e("label", { htmlFor: "vip_" + idx, style: { cursor: "pointer", fontSize: "13px" } }, 
-                        formatProductName(item.productName || item.productId)
-                      )
-                    ),
-                    isChecked && e("div", { style: { display: "flex", alignItems: "center", gap: "6px" } },
-                      e("span", { style: { fontSize: "11px", color: "#4a5568" } }, "Points Required:"),
-                      e("input", { 
-                        type: "number", 
-                        min: "1", 
-                        value: pointsVal, 
-                        onChange: (ev) => handleVipPointsChange(item.productId, ev.target.value), 
-                        style: { width: "70px", padding: "4px 8px", borderRadius: "4px", border: "1px solid #cbd5e0", fontSize: "12px", textAlign: "right" } 
-                      })
-                    )
-                  );
-                })
-              )
-            ),
-
-            e("button", { className: "button-primary", onClick: () => handleSaveThemeSettings(adminThemePrimary, adminThemeSecondary, adminMaxAddonLimit, adminMinStartDateDays, adminAddons, adminDiscountProfiles) }, "💾 Save Custom Portal Settings")
-          )
+          e("button", { className: "button-primary", onClick: () => handleSaveThemeSettings(adminThemePrimary, adminThemeSecondary, adminMaxAddonLimit, adminMinStartDateDays, adminAddons, adminDiscountProfiles) }, "💾 Save Custom Portal Settings")
         );
       };
 
@@ -8060,7 +8063,8 @@ app.get("/", (req, res) => {
           activeTab === "inventory" && renderInventoryTab(),
           activeTab === "quiz" && renderQuizTab(),
           activeTab === "milestones" && renderMilestonesTab(),
-          activeTab === "portal" && renderPortalTab()
+          activeTab === "portal" && renderPortalTab(),
+          activeTab === "settings" && renderSettingsTab()
         )
       );
     }
