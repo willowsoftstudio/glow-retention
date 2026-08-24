@@ -1477,6 +1477,43 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
     }
   });
 
+  // POST /api/storefront/portal/switch-tier (Customer updates/switches subscription tier or BYOB mode)
+  app.post("/api/storefront/portal/switch-tier", validateStorefrontSession, async (req, res) => {
+    try {
+      const { customerId, tier } = req.body;
+      if (!customerId || !tier) {
+        return res.status(400).json({ error: "Missing customerId or tier parameters" });
+      }
+
+      const profile = await prisma.customerProfile.findFirst({
+        where: { customerId, shop: req.body.session.shop },
+        include: { subscription: true }
+      });
+
+      if (!profile) {
+        return res.status(404).json({ error: "Customer profile not found" });
+      }
+
+      const updatedProfile = await prisma.customerProfile.update({
+        where: { id: profile.id },
+        data: {
+          subscription: {
+            upsert: {
+              create: { status: "ACTIVE", tier },
+              update: { tier }
+            }
+          }
+        },
+        include: { subscription: true }
+      });
+
+      console.log(`[Storefront Tier Switch] Customer ${customerId} updated subscription tier to: ${tier}`);
+      res.json({ success: true, profile: updatedProfile });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // POST /api/admin/subscriptions/inject-gift (Merchant directly injects a surprise targeted gift into a customer box)
   app.post("/api/admin/subscriptions/inject-gift", checkSession(), async (req, res) => {
     try {
@@ -2434,6 +2471,33 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
 
       const [activeStorefrontTab, setActiveStorefrontTab] = React.useState("curation");
       const [activeModalProduct, setActiveModalProduct] = React.useState(null);
+      const [currentTier, setCurrentTier] = React.useState(profile ? (profile.subscription?.tier || "NONE") : "NONE");
+
+      const switchSubscriptionMode = (newTier) => {
+        setActivating(true);
+        fetch("/api/storefront/portal/switch-tier", {
+          method: "POST",
+          headers: { 
+            "Content-Type": "application/json",
+            "x-shop-domain": "${shop}",
+            "x-test-session-id": "beauty-portal-session"
+          },
+          body: JSON.stringify({
+            customerId: profile ? profile.customerId : "${customerId}",
+            tier: newTier
+          })
+        })
+        .then(res => res.json())
+        .then(data => {
+          setActivating(false);
+          if (data.success) {
+            setCurrentTier(newTier);
+            setNotification("🔄 Successfully switched subscription mode to " + (newTier === "NONE" ? "Build-Your-Own Box" : newTier + " Curated Box") + "!");
+            setTimeout(() => setNotification(null), 3000);
+          }
+        })
+        .catch(err => { setActivating(false); console.error(err); });
+      };
 
       // Split visual routine selections: core subscription variants vs. one-time addon variants
       const [coreVariants, setCoreVariants] = React.useState(() => {
@@ -3789,70 +3853,137 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
             
             volumeBreaksWidget,
 
-            // Visual Slots showing chosen items (Core Recurring subscription Box!)
-            e("div", { style: { marginBottom: "20px", textAlign: "center", background: "#f8fafc", padding: "12px", borderRadius: "12px", border: "1px solid #e2e8f0" } },
-              e("div", { style: { fontSize: "11px", fontWeight: "700", color: "#718096", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "8px" } }, "📦 Your Recurring Subscription Routine"),
-              e("div", { className: "slot-container" },
-                slotsToRender.map((_, idx) => {
-                  const vId = coreVariants[idx];
-                  if (vId) {
-                    const prod = liveProducts.find(p => p.variantId === vId);
-                    return e("div", { 
-                      key: idx, 
-                      className: "slot slot-filled",
-                      onClick: () => { if (prod) setActiveModalProduct(prod); },
-                      style: { cursor: "zoom-in", padding: 0, overflow: "hidden", position: "relative" }
-                    },
-                      prod && prod.imageUrl ? e("img", { 
-                        src: prod.imageUrl, 
-                        alt: prod.productName,
-                        style: { width: "100%", height: "100%", objectFit: "cover", position: "absolute", top: 0, left: 0 }
-                      }) : e("div", { className: "slot-filled-icon", style: { zIndex: 1 } }, "🧴"),
-                      e("div", { 
-                        className: "slot-filled-title", 
-                        style: { 
-                          zIndex: 2, 
-                          background: "rgba(255, 255, 255, 0.95)", 
-                          width: "100%", 
-                          position: "absolute", 
-                          bottom: 0, 
-                          left: 0, 
-                          padding: "2px 0", 
-                          fontSize: "9px", 
-                          fontWeight: "bold",
-                          borderTop: "1px solid #eae6df"
-                        } 
-                      }, prod ? prod.productName.split(" Serum")[0].split(" Mask")[0] : "Product")
-                    );
-                  } else {
-                    return e("div", { 
-                      key: idx, 
-                      className: "slot slot-empty", 
-                      style: { display: "flex", alignItems: "center", justifyContent: "center" } 
-                    },
-                      e("span", { style: { fontSize: "10px", fontWeight: "bold", color: "#a0aec0", textTransform: "uppercase", letterSpacing: "0.5px", padding: "0 8px", textAlign: "center" } }, slotLabels[idx] || "Upgrade 🌟")
-                    );
-                  }
-                })
-              ),
+            // Visual Curation Tier Switch & Setup Status Headers
+            (() => {
+              const isCuration = ["STARTER", "PRO", "ENTERPRISE"].includes(currentTier);
+              if (isCuration) {
+                return e("div", null,
+                  e("div", { style: { background: "var(--primary-light)", border: "1.5px dashed var(--primary-color)", borderRadius: "8px", padding: "16px", marginBottom: "16px", display: "flex", justifyContent: "space-between", alignItems: "center" } },
+                    e("div", { style: { textAlign: "left" } },
+                      e("div", { style: { fontSize: "12px", fontWeight: "700", color: "var(--primary-color)", display: "flex", alignItems: "center", gap: "6px" } }, "✨ Personalized AI Curation Plan Active"),
+                      e("div", { style: { fontSize: "10px", color: "#718096", marginTop: "2px" } }, "Active Tier: " + currentTier + " Box. Curation override slots active.")
+                    ),
+                    e("button", { style: { padding: "4px 8px", fontSize: "10px", color: "#4a5568", border: "1px solid #cbd5e0", background: "white", borderRadius: "4px", cursor: "pointer", fontWeight: "bold" }, onClick: () => switchSubscriptionMode("NONE") }, "Switch to BYOB Box")
+                  ),
+                  
+                  // Widescreen Visual Slots Routine Builder Card
+                  e("div", { style: { marginBottom: "20px", textAlign: "center", background: "#f8fafc", padding: "12px", borderRadius: "12px", border: "1px solid #e2e8f0" } },
+                    e("div", { style: { fontSize: "11px", fontWeight: "700", color: "#718096", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "8px" } }, "📦 Your Recurring Subscription Routine"),
+                    e("div", { className: "slot-container" },
+                      slotsToRender.map((_, idx) => {
+                        const vId = coreVariants[idx];
+                        if (vId) {
+                          const prod = liveProducts.find(p => p.variantId === vId);
+                          return e("div", { 
+                            key: idx, 
+                            className: "slot slot-filled",
+                            onClick: () => { if (prod) setActiveModalProduct(prod); },
+                            style: { cursor: "zoom-in", padding: 0, overflow: "hidden", position: "relative" }
+                          },
+                            prod && prod.imageUrl ? e("img", { 
+                              src: prod.imageUrl, 
+                              alt: prod.productName,
+                              style: { width: "100%", height: "100%", objectFit: "cover", position: "absolute", top: 0, left: 0 }
+                            }) : e("div", { className: "slot-filled-icon", style: { zIndex: 1 } }, "🧴"),
+                            e("div", { 
+                              className: "slot-filled-title", 
+                              style: { 
+                                zIndex: 2, 
+                                background: "rgba(255, 255, 255, 0.95)", 
+                                width: "100%", 
+                                position: "absolute", 
+                                bottom: 0, 
+                                left: 0, 
+                                padding: "2px 0", 
+                                fontSize: "9px", 
+                                fontWeight: "bold",
+                                borderTop: "1px solid #eae6df"
+                              } 
+                            }, prod ? prod.productName.split(" Serum")[0].split(" Mask")[0] : "Product")
+                          );
+                        } else {
+                          return e("div", { 
+                            key: idx, 
+                            className: "slot slot-empty", 
+                            style: { display: "flex", alignItems: "center", justifyContent: "center" } 
+                          },
+                            e("span", { style: { fontSize: "10px", fontWeight: "bold", color: "#a0aec0", textTransform: "uppercase", letterSpacing: "0.5px", padding: "0 8px", textAlign: "center" } }, slotLabels[idx] || "Upgrade 🌟")
+                          );
+                        }
+                      })
+                    ),
 
-              e("div", { style: { marginTop: "12px", padding: "0 10px" } },
-                e("button", {
-                  className: "btn-primary",
-                  disabled: addonVariants.length >= maxAddonLimit,
-                  onClick: addDynamicAddOn,
-                  style: {
-                    width: "100%",
-                    padding: "10px",
-                    fontSize: "12px",
-                    background: addonVariants.length >= maxAddonLimit ? "#e2e8f0" : "var(--primary-color)",
-                    borderColor: addonVariants.length >= maxAddonLimit ? "#cbd5e0" : "var(--primary-color)",
-                    color: addonVariants.length >= maxAddonLimit ? "#a0aec0" : "white",
-                    cursor: addonVariants.length >= maxAddonLimit ? "not-allowed" : "pointer"
-                  }
-                }, addonVariants.length >= maxAddonLimit ? "🛍️ Add-on Limit Reached (" + maxAddonLimit + ")" : "🛍️ + Personalized AI Add-on")
-              )
-            ),
+                    e("div", { style: { marginTop: "12px", padding: "0 10px" } },
+                      e("button", {
+                        className: "btn-primary",
+                        disabled: addonVariants.length >= maxAddonLimit,
+                        onClick: addDynamicAddOn,
+                        style: {
+                          width: "100%",
+                          padding: "10px",
+                          fontSize: "12px",
+                          background: addonVariants.length >= maxAddonLimit ? "#e2e8f0" : "var(--primary-color)",
+                          borderColor: addonVariants.length >= maxAddonLimit ? "#cbd5e0" : "var(--primary-color)",
+                          color: addonVariants.length >= maxAddonLimit ? "#a0aec0" : "white",
+                          cursor: addonVariants.length >= maxAddonLimit ? "not-allowed" : "pointer"
+                        }
+                      }, addonVariants.length >= maxAddonLimit ? "🛍️ Add-on Limit Reached (" + maxAddonLimit + ")" : "🛍️ + Personalized AI Add-on")
+                    )
+                  )
+                );
+              } else {
+                return e("div", null,
+                  // Invitation to flat-rate Curation mode!
+                  e("div", { style: { background: "linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%)", border: "1.5px dashed #008060", borderRadius: "8px", padding: "16px", marginBottom: "16px", textAlign: "center" } },
+                    e("div", { style: { fontSize: "13px", fontWeight: "700", color: "#14532d", marginBottom: "4px", display: "flex", alignItems: "center", justifyContent: "center", gap: "6px" } }, "✨ Let our AI Curate Your Box!"),
+                    e("p", { style: { fontSize: "11px", color: "#166534", margin: "0 0 12px 0", lineHeight: "1.4" } }, "Upgrade to a flat-rate Personalized Skincare Curation box and let our advanced AI optimize your routine slots season-by-season!"),
+                    e("div", { style: { display: "flex", gap: "8px", justifyContent: "center" } },
+                      e("button", { className: "btn-primary", style: { padding: "6px 12px", fontSize: "11px", background: "#008060", border: "none", borderRadius: "4px" }, onClick: () => switchSubscriptionMode("PRO") }, "Activate AI Curation Box")
+                    )
+                  ),
+                  
+                  // Simple BYOB list customizer!
+                  e("div", { style: { marginBottom: "20px", textAlign: "center", background: "#f8fafc", padding: "16px", borderRadius: "12px", border: "1px solid #e2e8f0" } },
+                    e("div", { style: { fontSize: "11px", fontWeight: "700", color: "#718096", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "12px" } }, "📦 Your Build-Your-Own Box Items"),
+                    coreVariants.length === 0 ? e("p", { style: { fontSize: "12px", color: "#a0aec0", fontStyle: "italic", margin: "20px 0" } }, "Your box is empty! Click items in the Skincare Catalog on the left to build your box from the ground up.") : e("div", { style: { display: "flex", flexDirection: "column", gap: "8px" } },
+                      [...new Set(coreVariants)].map(vId => {
+                        const prod = liveProducts.find(p => p.variantId === vId);
+                        const qty = getProductQty(vId);
+                        return e("div", { key: vId, style: { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 12px", background: "#fff", borderRadius: "4px", border: "1px solid #eae6df" } },
+                          e("div", { style: { textAlign: "left" } },
+                            e("div", { style: { fontSize: "12px", fontWeight: "bold", color: "#2d3748" } }, prod ? prod.productName : "Product"),
+                            e("div", { style: { fontSize: "10px", color: "#718096", marginTop: "2px" } }, "$" + (prod ? prod.price.toFixed(2) : "30.00") + " each")
+                          ),
+                          e("div", { style: { display: "flex", alignItems: "center", gap: "8px" } },
+                            e("button", { style: { width: "20px", height: "20px", borderRadius: "50%", border: "1px solid #cbd5e0", cursor: "pointer", background: "white", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "12px", padding: 0 }, onClick: () => handleDecrement(vId) }, "-"),
+                            e("span", { style: { fontSize: "12px", fontWeight: "bold" } }, qty),
+                            e("button", { style: { width: "20px", height: "20px", borderRadius: "50%", border: "1px solid #cbd5e0", cursor: "pointer", background: "white", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "12px", padding: 0 }, onClick: () => handleIncrement(vId) }, "+"),
+                            e("button", { style: { marginLeft: "10px", border: "none", background: "none", color: "#e53e3e", fontSize: "12px", fontWeight: "bold", cursor: "pointer" }, onClick: () => handleRemoveFromBox(vId) }, "✕")
+                          )
+                        );
+                      })
+                    ),
+                    
+                    e("div", { style: { marginTop: "12px", padding: "0 10px" } },
+                      e("button", {
+                        className: "btn-primary",
+                        disabled: addonVariants.length >= maxAddonLimit,
+                        onClick: addDynamicAddOn,
+                        style: {
+                          width: "100%",
+                          padding: "10px",
+                          fontSize: "12px",
+                          background: addonVariants.length >= maxAddonLimit ? "#e2e8f0" : "var(--primary-color)",
+                          borderColor: addonVariants.length >= maxAddonLimit ? "#cbd5e0" : "var(--primary-color)",
+                          color: addonVariants.length >= maxAddonLimit ? "#a0aec0" : "white",
+                          cursor: addonVariants.length >= maxAddonLimit ? "not-allowed" : "pointer"
+                        }
+                      }, addonVariants.length >= maxAddonLimit ? "🛍️ Add-on Limit Reached (" + maxAddonLimit + ")" : "🛍️ + Personalized AI Add-on")
+                    )
+                  )
+                );
+              }
+            })(),
 
             // Unlocked Glow Points VIP Redemptions (Smartrr & Stay AI Parity!)
             e("div", { style: { marginBottom: "20px", background: "#fcfaf6", padding: "16px", borderRadius: "4px", border: "1.5px dashed var(--primary-color)" } },
@@ -4569,6 +4700,23 @@ app.post("/api/admin/curations/:id/accept", async (req, res) => {
       }
     });
 
+    if (curation.customerId) {
+      const contract = await prisma.subscriptionContract.findFirst({
+        where: { customerId: curation.customerId, status: "ACTIVE" }
+      });
+      if (contract) {
+        const itemsToUpdate = acceptedItems.map((it: any) => ({
+          variantId: it.variantId,
+          productName: it.productName || "Skincare Product",
+          price: parseFloat(it.price || "30.00")
+        }));
+        await prisma.subscriptionContract.update({
+          where: { id: contract.id },
+          data: { items: JSON.stringify(itemsToUpdate) }
+        });
+      }
+    }
+
     res.json(curation);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -4589,6 +4737,23 @@ app.post("/api/admin/curations/:id/update", async (req, res) => {
         margin: parseFloat(margin)
       }
     });
+
+    if (curation.customerId && curation.status === "ACCEPTED") {
+      const contract = await prisma.subscriptionContract.findFirst({
+        where: { customerId: curation.customerId, status: "ACTIVE" }
+      });
+      if (contract) {
+        const itemsToUpdate = suggestedItems.map((it: any) => ({
+          variantId: it.variantId,
+          productName: it.productName || "Skincare Product",
+          price: parseFloat(it.price || "30.00")
+        }));
+        await prisma.subscriptionContract.update({
+          where: { id: contract.id },
+          data: { items: JSON.stringify(itemsToUpdate) }
+        });
+      }
+    }
 
     res.json(curation);
   } catch (err: any) {
