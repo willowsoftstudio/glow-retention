@@ -4401,32 +4401,44 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
                       const isAlreadyInBox = coreVariants.includes(activeModalProduct.variantId);
                       const isAddonInBox = addonVariants.includes(activeModalProduct.variantId);
 
-                      if (isCuration && isAlreadyInBox) {
-                        // Dynamic step mapping for swapping alternatives of the same routine step!
-                        const modalStep = getProductStep(activeModalProduct);
-                        const alternatives = liveProducts.filter(p => p.variantId !== activeModalProduct.variantId && getProductStep(p) === modalStep);
-                        
-                        return e("div", { style: { display: "flex", flexDirection: "column", gap: "8px", width: "100%" } },
-                          e("label", { style: { fontSize: "11px", fontWeight: "bold", color: "#4a5568", display: "block", marginBottom: "4px" } }, "🔄 Swap this curated " + modalStep + " slot with an alternative:"),
-                          e("select", {
-                            value: "",
-                            onChange: (ev) => {
-                              const newVarId = ev.target.value;
-                              if (!newVarId) return;
-                              const copy = [...coreVariants];
-                              const idx = copy.indexOf(activeModalProduct.variantId);
-                              if (idx > -1) {
-                                copy[idx] = newVarId;
-                                setCoreVariants(copy);
-                              }
-                              setActiveModalProduct(null);
+                      if (isCuration) {
+                        if (isAlreadyInBox) {
+                          // Dynamic step mapping for swapping alternatives of the same routine step!
+                          const modalStep = getProductStep(activeModalProduct);
+                          const alternatives = liveProducts.filter(p => p.variantId !== activeModalProduct.variantId && getProductStep(p) === modalStep);
+                          
+                          return e("div", { style: { display: "flex", flexDirection: "column", gap: "8px", width: "100%" } },
+                            e("label", { style: { fontSize: "11px", fontWeight: "bold", color: "#4a5568", display: "block", marginBottom: "4px" } }, "🔄 Swap this curated " + modalStep + " slot with an alternative:"),
+                            e("select", {
+                              value: "",
+                              onChange: (ev) => {
+                                const newVarId = ev.target.value;
+                                if (!newVarId) return;
+                                const copy = [...coreVariants];
+                                const idx = copy.indexOf(activeModalProduct.variantId);
+                                if (idx > -1) {
+                                  copy[idx] = newVarId;
+                                  setCoreVariants(copy);
+                                }
+                                setActiveModalProduct(null);
+                              },
+                              style: { width: "100%", padding: "10px", borderRadius: "6px", border: "1px solid var(--primary-color)", fontSize: "13px", background: "white", cursor: "pointer" }
                             },
-                            style: { width: "100%", padding: "10px", borderRadius: "6px", border: "1px solid var(--primary-color)", fontSize: "13px", background: "white", cursor: "pointer" }
-                          },
-                            e("option", { value: "" }, "Select a skincare alternative to swap..."),
-                            alternatives.map(alt => e("option", { key: alt.variantId, value: alt.variantId }, alt.productName + " ($" + alt.price.toFixed(2) + ")"))
-                          )
-                        );
+                              e("option", { value: "" }, "Select a skincare alternative to swap..."),
+                              alternatives.map(alt => e("option", { key: alt.variantId, value: alt.variantId }, alt.productName + " ($" + alt.price.toFixed(2) + ")"))
+                            )
+                          );
+                        } else {
+                          // Block adding new items for curated subscriptions, instruct to swap!
+                          return e("div", { style: { display: "flex", flexDirection: "column", gap: "8px", width: "100%", textAlign: "center" } },
+                            e("div", { style: { fontSize: "12px", color: "#e53e3e", fontWeight: "bold", background: "#fff5f5", border: "1px solid #fed7d7", padding: "10px", borderRadius: "6px", lineHeight: "1.4" } }, "⚠️ Your Curated Subscription Routine Box has reached its locked flat-rate slot capacity limit! To include this alternative product, close this details panel and click on one of your active box slots to swap them!"),
+                            e("button", { 
+                              className: "btn-secondary", 
+                              onClick: () => setActiveModalProduct(null),
+                              style: { padding: "10px", fontSize: "12px", marginTop: "4px", width: "100%" }
+                            }, "Close Details")
+                          );
+                        }
                       }
 
                       return e("div", { style: { display: "flex", gap: "10px", flex: 1 } },
@@ -7918,15 +7930,15 @@ app.get("/", (req, res) => {
             e("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "16px", marginBottom: "16px" } },
               e("div", { style: { border: "1px solid #b8dfc4", background: "#e2f1e8", padding: "12px", borderRadius: "6px" } },
                 e("div", { style: { fontWeight: "bold", fontSize: "13px", color: "#1e5128", marginBottom: "4px" } }, "🧴 Step 1: Cleanse"),
-                e("p", { style: { fontSize: "11px", color: "#14532d", margin: 0, lineHeight: "1.4" } }, "Tag: ", e("code", { style: { background: "#fff", padding: "2px 4px", borderRadius: "3px" } }, "skin_care_step:cleanse"), "\nUsed for Face Wash, Foaming Wash, Milky Toners, and Oil Cleansers.")
+                e("p", { style: { fontSize: "11px", color: "#14532d", margin: 0, lineHeight: "1.4" } }, "Tag: ", e("code", { style: { background: "#fff", padding: "2px 4px", borderRadius: "3px" } }, "skin_care_step:cleanse"), " — Used for Face Wash, Foaming Wash, Milky Toners, and Oil Cleansers.")
               ),
               e("div", { style: { border: "1px solid #feebc8", background: "#fffaf0", padding: "12px", borderRadius: "6px" } },
                 e("div", { style: { fontWeight: "bold", fontSize: "13px", color: "#7b341e", marginBottom: "4px" } }, "🔮 Step 2: Treat"),
-                e("p", { style: { fontSize: "11px", color: "#7b341e", margin: 0, lineHeight: "1.4" } }, "Tag: ", e("code", { style: { background: "#fff", padding: "2px 4px", borderRadius: "3px" } }, "skin_care_step:treat"), "\nUsed for Active Serums, Treatment Oils, Sheet Masks, Peels, and Acne Patches.")
+                e("p", { style: { fontSize: "11px", color: "#7b341e", margin: 0, lineHeight: "1.4" } }, "Tag: ", e("code", { style: { background: "#fff", padding: "2px 4px", borderRadius: "3px" } }, "skin_care_step:treat"), " — Used for Active Serums, Treatment Oils, Sheet Masks, Peels, and Acne Patches.")
               ),
               e("div", { style: { border: "1px solid #bee3f8", background: "#ebf8ff", padding: "12px", borderRadius: "6px" } },
                 e("div", { style: { fontWeight: "bold", fontSize: "13px", color: "#2b6cb0", marginBottom: "4px" } }, "❄️ Step 3: Restore"),
-                e("p", { style: { fontSize: "11px", color: "#2b6cb0", margin: 0, lineHeight: "1.4" } }, "Tag: ", e("code", { style: { background: "#fff", padding: "2px 4px", borderRadius: "3px" } }, "skin_care_step:restore"), "\nUsed for Moisturizers, Barrier Repair Creams, Lotions, and SPF Day Creams.")
+                e("p", { style: { fontSize: "11px", color: "#2b6cb0", margin: 0, lineHeight: "1.4" } }, "Tag: ", e("code", { style: { background: "#fff", padding: "2px 4px", borderRadius: "3px" } }, "skin_care_step:restore"), " — Used for Moisturizers, Barrier Repair Creams, Lotions, and SPF Day Creams.")
               )
             ),
             
