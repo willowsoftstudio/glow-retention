@@ -4397,19 +4397,50 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
 
                   e("div", { style: { display: "flex", gap: "10px", flexWrap: "wrap", width: "100%" } },
                     (() => {
-                      const isAlreadyInBox = coreVariants.includes(activeModalProduct.variantId) || addonVariants.includes(activeModalProduct.variantId);
+                      const isCuration = ["STARTER", "PRO", "ENTERPRISE"].includes(currentTier);
+                      const isAlreadyInBox = coreVariants.includes(activeModalProduct.variantId);
+                      const isAddonInBox = addonVariants.includes(activeModalProduct.variantId);
+
+                      if (isCuration && isAlreadyInBox) {
+                        // Dynamic step mapping for swapping alternatives of the same routine step!
+                        const modalStep = getProductStep(activeModalProduct);
+                        const alternatives = liveProducts.filter(p => p.variantId !== activeModalProduct.variantId && getProductStep(p) === modalStep);
+                        
+                        return e("div", { style: { display: "flex", flexDirection: "column", gap: "8px", width: "100%" } },
+                          e("label", { style: { fontSize: "11px", fontWeight: "bold", color: "#4a5568", display: "block", marginBottom: "4px" } }, "🔄 Swap this curated " + modalStep + " slot with an alternative:"),
+                          e("select", {
+                            value: "",
+                            onChange: (ev) => {
+                              const newVarId = ev.target.value;
+                              if (!newVarId) return;
+                              const copy = [...coreVariants];
+                              const idx = copy.indexOf(activeModalProduct.variantId);
+                              if (idx > -1) {
+                                copy[idx] = newVarId;
+                                setCoreVariants(copy);
+                              }
+                              setActiveModalProduct(null);
+                            },
+                            style: { width: "100%", padding: "10px", borderRadius: "6px", border: "1px solid var(--primary-color)", fontSize: "13px", background: "white", cursor: "pointer" }
+                          },
+                            e("option", { value: "" }, "Select a skincare alternative to swap..."),
+                            alternatives.map(alt => e("option", { key: alt.variantId, value: alt.variantId }, alt.productName + " ($" + alt.price.toFixed(2) + ")"))
+                          )
+                        );
+                      }
+
                       return e("div", { style: { display: "flex", gap: "10px", flex: 1 } },
                         e("button", { 
                           className: "btn-primary", 
-                          disabled: activeModalProduct.stockLevel <= 0 || isAlreadyInBox,
+                          disabled: activeModalProduct.stockLevel <= 0 || isAlreadyInBox || isAddonInBox,
                           onClick: () => {
                             handleIncrement(activeModalProduct.variantId);
                             setActiveModalProduct(null);
                           },
                           style: { flex: 1, padding: "12px", fontSize: "13px" }
-                        }, activeModalProduct.stockLevel <= 0 ? "Out of Stock" : (isAlreadyInBox ? "Added to Box ✓" : "Add to Routine Box")),
+                        }, activeModalProduct.stockLevel <= 0 ? "Out of Stock" : (isAlreadyInBox || isAddonInBox ? "Added to Box ✓" : "Add to Routine Box")),
                         
-                        isAlreadyInBox && e("button", {
+                        (isAlreadyInBox || isAddonInBox) && e("button", {
                           className: "btn-secondary",
                           onClick: () => {
                             handleRemoveFromBox(activeModalProduct.variantId);
@@ -5171,7 +5202,7 @@ app.post("/api/admin/curations/generate", async (req, res) => {
           .filter((t: string) => t.toLowerCase().startsWith("concern:"))
           .map((t: string) => t.split(":")[1].trim().toLowerCase());
         const ingredients = tags
-          .filter((t: string) => t.toLowerCase().startsWith("ingredient:"))
+          .filter((t: string) => t.toLowerCase().startsWith("ingredient:") || t.toLowerCase().startsWith("allergen:"))
           .map((t: string) => t.split(":")[1].trim().toLowerCase());
         const ethical = tags
           .filter((t: string) => t.toLowerCase().startsWith("ethical:"))
@@ -7223,6 +7254,16 @@ app.get("/", (req, res) => {
          });
        };
 
+       const getAdminProductStep = (pId) => {
+         const prod = inventory.find(p => p.productId === pId);
+         if (!prod) return "Treat";
+         const name = prod.productName.toLowerCase();
+         if (name.includes("clean") || name.includes("wash") || name.includes("foam") || name.includes("soap")) return "Cleanse";
+         if (name.includes("treat") || name.includes("serum") || name.includes("acid") || name.includes("mask") || name.includes("peel")) return "Treat";
+         if (name.includes("moistur") || name.includes("cream") || name.includes("lotion") || name.includes("restore") || name.includes("balm") || name.includes("shield")) return "Restore";
+         return "Treat";
+       };
+
        const skipContract = () => {
           if (!portalContract) return;
           fetch("/api/storefront/portal/postpone", {
@@ -7660,6 +7701,47 @@ app.get("/", (req, res) => {
                       // List of items being edited
                       adminEditingItems.length === 0 ? e("div", { style: { fontSize: "12px", color: "#718096", fontStyle: "italic", textAlign: "center", padding: "10px 0" } }, "No items in bundle. Use selector below to add products.") :
                       adminEditingItems.map((it, idx) => {
+                        const isCuration = currentCurationTier !== "NONE";
+                        const isCoreCurated = isCuration && !it.isAddOn;
+
+                        if (isCoreCurated) {
+                          const step = getAdminProductStep(it.variantId);
+                          const alts = inventory.filter(p => p.productId !== it.variantId && getAdminProductStep(p.productId) === step);
+                          
+                          return e("div", { key: idx, style: { padding: "6px 0", borderBottom: "1px solid #edf2f7" } },
+                            e("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "4px" } },
+                              e("div", { style: { textAlign: "left", flex: 1, marginRight: "8px" } },
+                                e("div", { style: { fontSize: "12px", fontWeight: "bold", color: "#2d3748" } }, formatProductName(it.productName || it.variantId)),
+                                e("div", { style: { fontSize: "10px", color: "#718096", marginTop: "2px" } }, "Curated " + step + " Slot • $" + parseFloat(it.price).toFixed(2))
+                              )
+                            ),
+                            e("div", { style: { marginTop: "4px" } },
+                              e("select", {
+                                value: "",
+                                onChange: (ev) => {
+                                  const newVal = ev.target.value;
+                                  if (!newVal) return;
+                                  const prod = inventory.find(p => p.productId === newVal);
+                                  if (prod) {
+                                    const copy = [...adminEditingItems];
+                                    copy[idx] = {
+                                      variantId: newVal,
+                                      productName: prod.productName.split(" (")[0],
+                                      price: prod.price,
+                                      quantity: 1
+                                    };
+                                    setAdminEditingItems(copy);
+                                  }
+                                },
+                                style: { width: "100%", padding: "6px", borderRadius: "4px", border: "1px solid var(--primary-color)", fontSize: "11px", background: "white", cursor: "pointer" }
+                              },
+                                e("option", { value: "" }, "🔄 Swap curated " + step + " product..."),
+                                alts.map(alt => e("option", { key: alt.productId, value: alt.productId }, formatProductName(alt.productName) + " ($" + alt.price.toFixed(2) + ")"))
+                              )
+                            )
+                          );
+                        }
+
                         const handleRemoveItem = () => {
                           setAdminEditingItems(adminEditingItems.filter((_, i) => i !== idx));
                         };
@@ -7688,7 +7770,7 @@ app.get("/", (req, res) => {
                       }),
 
                       // Dynamic add-product select dropdown inside bundle editor
-                      e("div", { style: { marginTop: "12px", borderTop: "1px dashed #e2e8f0", paddingTop: "10px" } },
+                      (currentCurationTier === "NONE") && e("div", { style: { marginTop: "12px", borderTop: "1px dashed #e2e8f0", paddingTop: "10px" } },
                         e("label", { style: { display: "block", fontSize: "10px", fontWeight: "bold", color: "#718096", marginBottom: "4px" } }, "➕ Add Skincare Product to Bundle"),
                         e("select", {
                           value: "",
@@ -7828,11 +7910,47 @@ app.get("/", (req, res) => {
       };
 
       const renderSettingsTab = () => {
-        return e("div", { className: "card" },
-          e("h3", { style: { fontSize: "16px", fontWeight: "600", marginBottom: "8px", display: "flex", alignItems: "center" } }, "🎨 Customer Glow Portal Theme Branding & Limits"),
-          e("p", { style: { color: "#6d7175", fontSize: "13px", marginBottom: "16px" } }, "Configure custom primary and secondary brand styling colors and limit constraints globally per subscriber box."),
-          
-          e("div", { style: { display: "flex", gap: "24px", flexWrap: "wrap", alignItems: "center", marginBottom: "16px" } },
+        return e("div", null,
+          e("div", { className: "card", style: { marginBottom: "20px" } },
+            e("h3", { style: { fontSize: "16px", fontWeight: "600", marginBottom: "8px", display: "flex", alignItems: "center" } }, "💡 Skincare Step Shopify Tagging Guide"),
+            e("p", { style: { color: "#6d7175", fontSize: "13px", marginBottom: "16px" } }, "To automatically categorize your live store products into standard curation routine slots, add these exact tags to your products inside your Shopify Admin details page:"),
+            
+            e("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "16px", marginBottom: "16px" } },
+              e("div", { style: { border: "1px solid #b8dfc4", background: "#e2f1e8", padding: "12px", borderRadius: "6px" } },
+                e("div", { style: { fontWeight: "bold", fontSize: "13px", color: "#1e5128", marginBottom: "4px" } }, "🧴 Step 1: Cleanse"),
+                e("p", { style: { fontSize: "11px", color: "#14532d", margin: 0, lineHeight: "1.4" } }, "Tag: ", e("code", { style: { background: "#fff", padding: "2px 4px", borderRadius: "3px" } }, "skin_care_step:cleanse"), "\nUsed for Face Wash, Foaming Wash, Milky Toners, and Oil Cleansers.")
+              ),
+              e("div", { style: { border: "1px solid #feebc8", background: "#fffaf0", padding: "12px", borderRadius: "6px" } },
+                e("div", { style: { fontWeight: "bold", fontSize: "13px", color: "#7b341e", marginBottom: "4px" } }, "🔮 Step 2: Treat"),
+                e("p", { style: { fontSize: "11px", color: "#7b341e", margin: 0, lineHeight: "1.4" } }, "Tag: ", e("code", { style: { background: "#fff", padding: "2px 4px", borderRadius: "3px" } }, "skin_care_step:treat"), "\nUsed for Active Serums, Treatment Oils, Sheet Masks, Peels, and Acne Patches.")
+              ),
+              e("div", { style: { border: "1px solid #bee3f8", background: "#ebf8ff", padding: "12px", borderRadius: "6px" } },
+                e("div", { style: { fontWeight: "bold", fontSize: "13px", color: "#2b6cb0", marginBottom: "4px" } }, "❄️ Step 3: Restore"),
+                e("p", { style: { fontSize: "11px", color: "#2b6cb0", margin: 0, lineHeight: "1.4" } }, "Tag: ", e("code", { style: { background: "#fff", padding: "2px 4px", borderRadius: "3px" } }, "skin_care_step:restore"), "\nUsed for Moisturizers, Barrier Repair Creams, Lotions, and SPF Day Creams.")
+              )
+            ),
+            
+            e("div", { style: { borderTop: "1px dashed #cbd5e0", paddingTop: "12px", marginTop: "12px" } },
+              e("div", { style: { fontWeight: "bold", fontSize: "12px", color: "#2c3e50", marginBottom: "6px" } }, "🧪 Target Skin Profile Tags (DNA Matching):"),
+              e("p", { style: { color: "#6d7175", fontSize: "11px", margin: "0 0 10px 0", lineHeight: "1.4" } }, "Boost matching accuracy by assigning skin DNA profile traits. The AI engine automatically parses these tags in real time:"),
+              e("div", { style: { display: "flex", gap: "8px", flexWrap: "wrap" } },
+                [
+                  { label: "Oily DNA", tag: "skin_type:oily" },
+                  { label: "Dry DNA", tag: "skin_type:dry" },
+                  { label: "Acne Concern", tag: "concern:acne" },
+                  { label: "Aging Concern", tag: "concern:aging" },
+                  { label: "Nut Allergen", tag: "allergen:nuts" },
+                  { label: "Cruelty-Free", tag: "ethical:cruelty-free" }
+                ].map((tagItem, idx) => e("span", { key: idx, style: { fontSize: "10px", padding: "3px 8px", background: "#f4f6f8", border: "1px solid #cbd5e0", borderRadius: "12px", fontFamily: "monospace" } }, tagItem.label + " ➔ " + tagItem.tag))
+              )
+            )
+          ),
+
+          e("div", { className: "card" },
+            e("h3", { style: { fontSize: "16px", fontWeight: "600", marginBottom: "8px", display: "flex", alignItems: "center" } }, "🎨 Customer Glow Portal Theme Branding & Limits"),
+            e("p", { style: { color: "#6d7175", fontSize: "13px", marginBottom: "16px" } }, "Configure custom primary and secondary brand styling colors and limit constraints globally per subscriber box."),
+            
+            e("div", { style: { display: "flex", gap: "24px", flexWrap: "wrap", alignItems: "center", marginBottom: "16px" } },
             e("div", null,
               e("label", { style: { display: "block", fontSize: "12px", fontWeight: "bold", color: "#4a5568", marginBottom: "6px" } }, "Primary Brand Color"),
               e("div", { style: { display: "flex", alignItems: "center", gap: "8px" } },
@@ -8046,6 +8164,7 @@ app.get("/", (req, res) => {
           ),
 
           e("button", { className: "button-primary", onClick: () => handleSaveThemeSettings(adminThemePrimary, adminThemeSecondary, adminMaxAddonLimit, adminMinStartDateDays, adminAddons, adminDiscountProfiles) }, "💾 Save Custom Portal Settings")
+          )
         );
       };
 
