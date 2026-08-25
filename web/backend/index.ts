@@ -6708,42 +6708,23 @@ app.get("/", (req, res) => {
         }
 
         return e("div", null,
-          e("div", { className: "card", style: { marginBottom: "20px" } },
-            e("h3", { style: { fontSize: "16px", fontWeight: "600", marginBottom: "12px" } }, "🎯 Adaptive Curation Margin & Price Settings"),
-            e("p", { style: { color: "#6d7175", marginBottom: "20px", fontSize: "13px" } }, "Configure the target box price for each Subscription Box Tier (Starter, Pro, Enterprise) and your desired target margin. The Curation Engine will automatically optimize product matching to stay within these parameters."),
-            e("div", { style: { display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "16px", marginBottom: "20px" } },
-              e("div", null,
-                e("label", { style: { display: "block", fontWeight: "600", fontSize: "12px", marginBottom: "4px" } }, "STARTER Box Tier Price ($)"),
-                e("input", { type: "number", value: settingsLow, onChange: (e) => setSettingsLow(e.target.value), style: { width: "100%", padding: "6px", borderRadius: "4px", border: "1px solid #8c9196", fontSize: "13px" } })
-              ),
-              e("div", null,
-                e("label", { style: { display: "block", fontWeight: "600", fontSize: "12px", marginBottom: "4px" } }, "PRO Box Tier Price ($)"),
-                e("input", { type: "number", value: settingsMedium, onChange: (e) => setSettingsMedium(e.target.value), style: { width: "100%", padding: "6px", borderRadius: "4px", border: "1px solid #8c9196", fontSize: "13px" } })
-              ),
-              e("div", null,
-                e("label", { style: { display: "block", fontWeight: "600", fontSize: "12px", marginBottom: "4px" } }, "ENTERPRISE Box Tier Price ($)"),
-                e("input", { type: "number", value: settingsHigh, onChange: (e) => setSettingsHigh(e.target.value), style: { width: "100%", padding: "6px", borderRadius: "4px", border: "1px solid #8c9196", fontSize: "13px" } })
-              ),
-              e("div", null,
-                e("label", { style: { display: "block", fontWeight: "600", fontSize: "12px", marginBottom: "4px" } }, "Target Profit Margin (%)"),
-                e("input", { type: "number", value: settingsMargin, onChange: (e) => setSettingsMargin(e.target.value), style: { width: "100%", padding: "6px", borderRadius: "4px", border: "1px solid #8c9196", fontSize: "13px" } })
-              )
-            ),
-            e("div", { style: { display: "flex", gap: "12px" } },
-              e("button", { className: "button-primary", onClick: () => handleSaveSettings(settingsLow, settingsMedium, settingsHigh, settingsMargin) }, "💾 Save Curation Settings"),
-              e("button", { className: "button-secondary", style: { backgroundColor: "#00875a", color: "#fff", border: "none" }, onClick: handleGenerateCurations }, "⚡ Run Curation Optimizer Engine")
-            )
-          ),
           e("div", { className: "card" },
             e("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px", flexWrap: "wrap", gap: "12px" } },
               e("h3", { style: { fontSize: "16px", fontWeight: "600", margin: 0 } }, "Personalized Box Suggestions (Next Cycle)"),
-              e("input", { 
-                type: "text", 
-                placeholder: "🔍 Search customer curations...", 
-                value: curationSearch, 
-                onChange: (ev) => setCurationSearch(ev.target.value),
-                style: { padding: "8px 12px", borderRadius: "6px", border: "1px solid #cbd5e0", fontSize: "13px", width: "240px", outline: "none" }
-              })
+              e("div", { style: { display: "flex", gap: "12px", alignItems: "center" } },
+                e("input", { 
+                  type: "text", 
+                  placeholder: "🔍 Search customer curations...", 
+                  value: curationSearch, 
+                  onChange: (ev) => setCurationSearch(ev.target.value),
+                  style: { padding: "8px 12px", borderRadius: "6px", border: "1px solid #cbd5e0", fontSize: "13px", width: "200px", outline: "none" }
+                }),
+                e("button", { 
+                  className: "button-secondary", 
+                  style: { backgroundColor: "#00875a", color: "#fff", border: "none", fontSize: "12px", padding: "8px 14px", borderRadius: "4px", cursor: "pointer", fontWeight: "bold" }, 
+                  onClick: handleGenerateCurations 
+                }, "⚡ Run Curation Optimizer Engine")
+              )
             ),
             (() => {
               const filteredCurations = curations.filter(c => {
@@ -7693,10 +7674,32 @@ app.get("/", (req, res) => {
                     style: { width: "100%", padding: "8px", borderRadius: "6px", border: "1px solid #cbd5e0", fontSize: "13px", outline: "none", background: "white", boxSizing: "border-box" }
                   })
                 ),
-                e("div", { style: { textAlign: "right" } },
-                  e("div", { style: { fontSize: "10px", fontWeight: "bold", color: "#6d7175", textTransform: "uppercase", marginBottom: "4px" } }, "Contract Total Price"),
-                  e("div", { style: { fontSize: "18px", fontWeight: "800", color: "#2c3e50" } }, "$" + totalPrice.toFixed(2))
-                )
+                (() => {
+                  let priceSum = 0;
+                  let costSum = 0;
+                  adminSelectedVariants.forEach(vId => {
+                    const prod = inventory.find(p => p.productId === vId);
+                    priceSum += prod ? prod.price : 0;
+                    costSum += prod ? (prod.cost || 0) : 0;
+                  });
+                  const margin = priceSum > 0 ? ((priceSum - costSum) / priceSum) * 100 : 0;
+                  const isMarginOkay = margin >= parseFloat(settingsMargin);
+                  
+                  return e("div", { style: { display: "flex", gap: "16px", alignItems: "center", marginLeft: "auto", borderLeft: "1px solid #cbd5e0", paddingLeft: "16px" } },
+                    e("div", { style: { textAlign: "right" } },
+                      e("div", { style: { fontSize: "9px", fontWeight: "bold", color: "#6d7175", textTransform: "uppercase", marginBottom: "2px" } }, "Retail Price"),
+                      e("div", { style: { fontSize: "14px", fontWeight: "800", color: "#2c3e50" } }, "$" + priceSum.toFixed(2))
+                    ),
+                    e("div", { style: { textAlign: "right" } },
+                      e("div", { style: { fontSize: "9px", fontWeight: "bold", color: "#6d7175", textTransform: "uppercase", marginBottom: "2px" } }, "Wholesale Cost"),
+                      e("div", { style: { fontSize: "14px", fontWeight: "800", color: "#d32f2f" } }, "$" + costSum.toFixed(2))
+                    ),
+                    e("div", { style: { textAlign: "right" } },
+                      e("div", { style: { fontSize: "9px", fontWeight: "bold", color: "#6d7175", textTransform: "uppercase", marginBottom: "2px" } }, "Profit Margin"),
+                      e("div", { style: { fontSize: "14px", fontWeight: "800", color: isMarginOkay ? "#008060" : "#d69e2e" } }, margin.toFixed(1) + "%")
+                    )
+                  );
+                })()
               ),
 
               e("button", { 
@@ -7892,6 +7895,42 @@ app.get("/", (req, res) => {
                         )
                       ),
 
+                      // Live commercials price/cost/margin breakdown for edited bundle
+                      (() => {
+                        let priceSum = 0;
+                        let costSum = 0;
+                        adminEditingItems.forEach(it => {
+                          const prod = inventory.find(p => p.productId === it.variantId);
+                          const price = prod ? prod.price : 30.00;
+                          const cost = prod ? (prod.cost || 12.00) : 12.00;
+                          const qty = it.quantity || 1;
+                          priceSum += price * qty;
+                          costSum += cost * qty;
+                        });
+                        const margin = priceSum > 0 ? ((priceSum - costSum) / priceSum) * 100 : 0;
+                        const isMarginOkay = margin >= parseFloat(settingsMargin);
+
+                        return e("div", { style: { marginTop: "12px", borderTop: "1px dashed #cbd5e0", paddingTop: "10px", display: "flex", justifyContent: "space-between", alignItems: "center" } },
+                          e("div", null,
+                            e("div", { style: { fontSize: "10px", fontWeight: "bold", color: "#6d7175", textTransform: "uppercase", marginBottom: "2px" } }, "Swapped Bundle Pricing")
+                          ),
+                          e("div", { style: { display: "flex", gap: "12px", alignItems: "center" } },
+                            e("div", { style: { textAlign: "right" } },
+                              e("div", { style: { fontSize: "8px", fontWeight: "bold", color: "#718096", textTransform: "uppercase" } }, "Retail"),
+                              e("div", { style: { fontSize: "12px", fontWeight: "800", color: "#2c3e50" } }, "$" + priceSum.toFixed(2))
+                            ),
+                            e("div", { style: { textAlign: "right" } },
+                              e("div", { style: { fontSize: "8px", fontWeight: "bold", color: "#718096", textTransform: "uppercase" } }, "Cost"),
+                              e("div", { style: { fontSize: "12px", fontWeight: "800", color: "#d32f2f" } }, "$" + costSum.toFixed(2))
+                            ),
+                            e("div", { style: { textAlign: "right" } },
+                              e("div", { style: { fontSize: "8px", fontWeight: "bold", color: "#718096", textTransform: "uppercase" } }, "Margin"),
+                              e("div", { style: { fontSize: "12px", fontWeight: "800", color: isMarginOkay ? "#008060" : "#d69e2e" } }, margin.toFixed(1) + "%")
+                            )
+                          )
+                        );
+                      })(),
+
                       // Save/Cancel Action Buttons row inside bundle editor
                       e("div", { style: { display: "flex", gap: "8px", marginTop: "12px" } },
                         e("button", {
@@ -8003,38 +8042,28 @@ app.get("/", (req, res) => {
       const renderSettingsTab = () => {
         return e("div", null,
           e("div", { className: "card", style: { marginBottom: "20px" } },
-            e("h3", { style: { fontSize: "16px", fontWeight: "600", marginBottom: "8px", display: "flex", alignItems: "center" } }, "💡 Skincare Step Shopify Tagging Guide"),
-            e("p", { style: { color: "#6d7175", fontSize: "13px", marginBottom: "16px" } }, "To automatically categorize your live store products into standard curation routine slots, add these exact tags to your products inside your Shopify Admin details page:"),
+            e("h3", { style: { fontSize: "16px", fontWeight: "600", marginBottom: "8px", display: "flex", alignItems: "center" } }, "🎯 Adaptive Curation Margin & Price Settings"),
+            e("p", { style: { color: "#6d7175", marginBottom: "16px", fontSize: "13px" } }, "Configure the target box price for each curated flat-rate subscription box tier (Starter, Pro, Enterprise) and your target profit margin percentage. The curation engine dynamically optimizes product matching to maintain this profit threshold."),
             
-            e("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "16px", marginBottom: "16px" } },
-              e("div", { style: { border: "1px solid #b8dfc4", background: "#e2f1e8", padding: "12px", borderRadius: "6px" } },
-                e("div", { style: { fontWeight: "bold", fontSize: "13px", color: "#1e5128", marginBottom: "4px" } }, "🧴 Step 1: Cleanse"),
-                e("p", { style: { fontSize: "11px", color: "#14532d", margin: 0, lineHeight: "1.4" } }, "Tag: ", e("code", { style: { background: "#fff", padding: "2px 4px", borderRadius: "3px" } }, "skin_care_step:cleanse"), " — Used for Face Wash, Foaming Wash, Milky Toners, and Oil Cleansers.")
+            e("div", { style: { display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "16px", marginBottom: "16px" } },
+              e("div", null,
+                e("label", { style: { display: "block", fontSize: "12px", fontWeight: "bold", color: "#4a5568", marginBottom: "6px" } }, "STARTER Box Price ($)"),
+                e("input", { type: "number", value: settingsLow, onChange: (e) => setSettingsLow(e.target.value), style: { width: "100%", padding: "10px", borderRadius: "6px", border: "1px solid #cbd5e0", fontSize: "13px", outline: "none", boxSizing: "border-box" } })
               ),
-              e("div", { style: { border: "1px solid #feebc8", background: "#fffaf0", padding: "12px", borderRadius: "6px" } },
-                e("div", { style: { fontWeight: "bold", fontSize: "13px", color: "#7b341e", marginBottom: "4px" } }, "🔮 Step 2: Treat"),
-                e("p", { style: { fontSize: "11px", color: "#7b341e", margin: 0, lineHeight: "1.4" } }, "Tag: ", e("code", { style: { background: "#fff", padding: "2px 4px", borderRadius: "3px" } }, "skin_care_step:treat"), " — Used for Active Serums, Treatment Oils, Sheet Masks, Peels, and Acne Patches.")
+              e("div", null,
+                e("label", { style: { display: "block", fontSize: "12px", fontWeight: "bold", color: "#4a5568", marginBottom: "6px" } }, "PRO Box Price ($)"),
+                e("input", { type: "number", value: settingsMedium, onChange: (e) => setSettingsMedium(e.target.value), style: { width: "100%", padding: "10px", borderRadius: "6px", border: "1px solid #cbd5e0", fontSize: "13px", outline: "none", boxSizing: "border-box" } })
               ),
-              e("div", { style: { border: "1px solid #bee3f8", background: "#ebf8ff", padding: "12px", borderRadius: "6px" } },
-                e("div", { style: { fontWeight: "bold", fontSize: "13px", color: "#2b6cb0", marginBottom: "4px" } }, "❄️ Step 3: Restore"),
-                e("p", { style: { fontSize: "11px", color: "#2b6cb0", margin: 0, lineHeight: "1.4" } }, "Tag: ", e("code", { style: { background: "#fff", padding: "2px 4px", borderRadius: "3px" } }, "skin_care_step:restore"), " — Used for Moisturizers, Barrier Repair Creams, Lotions, and SPF Day Creams.")
+              e("div", null,
+                e("label", { style: { display: "block", fontSize: "12px", fontWeight: "bold", color: "#4a5568", marginBottom: "6px" } }, "ENTERPRISE Box Price ($)"),
+                e("input", { type: "number", value: settingsHigh, onChange: (e) => setSettingsHigh(e.target.value), style: { width: "100%", padding: "10px", borderRadius: "6px", border: "1px solid #cbd5e0", fontSize: "13px", outline: "none", boxSizing: "border-box" } })
+              ),
+              e("div", null,
+                e("label", { style: { display: "block", fontSize: "12px", fontWeight: "bold", color: "#4a5568", marginBottom: "6px" } }, "Target Profit Margin (%)"),
+                e("input", { type: "number", value: settingsMargin, onChange: (e) => setSettingsMargin(e.target.value), style: { width: "100%", padding: "10px", borderRadius: "6px", border: "1px solid #cbd5e0", fontSize: "13px", outline: "none", boxSizing: "border-box" } })
               )
             ),
-            
-            e("div", { style: { borderTop: "1px dashed #cbd5e0", paddingTop: "12px", marginTop: "12px" } },
-              e("div", { style: { fontWeight: "bold", fontSize: "12px", color: "#2c3e50", marginBottom: "6px" } }, "🧪 Target Skin Profile Tags (DNA Matching):"),
-              e("p", { style: { color: "#6d7175", fontSize: "11px", margin: "0 0 10px 0", lineHeight: "1.4" } }, "Boost matching accuracy by assigning skin DNA profile traits. The AI engine automatically parses these tags in real time:"),
-              e("div", { style: { display: "flex", gap: "8px", flexWrap: "wrap" } },
-                [
-                  { label: "Oily DNA", tag: "skin_type:oily" },
-                  { label: "Dry DNA", tag: "skin_type:dry" },
-                  { label: "Acne Concern", tag: "concern:acne" },
-                  { label: "Aging Concern", tag: "concern:aging" },
-                  { label: "Nut Allergen", tag: "allergen:nuts" },
-                  { label: "Cruelty-Free", tag: "ethical:cruelty-free" }
-                ].map((tagItem, idx) => e("span", { key: idx, style: { fontSize: "10px", padding: "3px 8px", background: "#f4f6f8", border: "1px solid #cbd5e0", borderRadius: "12px", fontFamily: "monospace" } }, tagItem.label + " ➔ " + tagItem.tag))
-              )
-            )
+            e("button", { className: "button-primary", onClick: () => handleSaveSettings(settingsLow, settingsMedium, settingsHigh, settingsMargin) }, "💾 Save Curation Settings")
           ),
 
           e("div", { className: "card" },
@@ -8226,68 +8255,108 @@ app.get("/", (req, res) => {
             )
           ),
 
-          // Exposing Allowed Add-Ons Catalog Selection checklist
-          e("div", { style: { borderTop: "1px solid #cbd5e0", paddingTop: "16px", marginBottom: "20px" } },
-            e("h4", { style: { fontSize: "14px", fontWeight: "600", color: "#2c3e50", marginBottom: "8px" } }, "🛍️ Configure Allowed Subscription Add-Ons Catalog"),
-            e("p", { style: { color: "#6d7175", fontSize: "12px", marginBottom: "12px" } }, "Choose which product variants from your live Shopify catalog are permitted for one-time subscription add-ons inside visual cart slots and chatbots."),
-            e("div", { style: { maxHeight: "200px", overflowY: "auto", border: "1px solid #e1e3e5", padding: "10px", borderRadius: "4px", backgroundColor: "#fafbfb" } },
-              inventory.map((item, idx) => {
-                const isChecked = adminAddons.includes(item.productId);
-                return e("div", { key: idx, style: { display: "flex", alignItems: "center", marginBottom: "10px" } },
-                  e("input", { 
-                    type: "checkbox", 
-                    id: "addon_" + idx, 
-                    checked: isChecked, 
-                    onChange: () => handleAddonToggle(item.productId),
-                    style: { marginRight: "10px" } 
-                  }),
-                  e("label", { htmlFor: "addon_" + idx, style: { cursor: "pointer", fontSize: "13px" } }, 
-                    formatProductName(item.productName || item.productId)
-                  )
-                );
-              })
-            )
-          ),
+          // Card 3: Unified Shopify Product Tags System Reference & Whitelists card!
+          e("div", { className: "card" },
+            e("h3", { style: { fontSize: "16px", fontWeight: "600", marginBottom: "12px", display: "flex", alignItems: "center" } }, "🏷️ Shopify Product Tags System Reference & Whitelists"),
+            
+            // Sub-card 3.1: Tagging Guide Reference
+            e("div", { style: { marginBottom: "24px", borderBottom: "1px dashed #cbd5e0", paddingBottom: "20px" } },
+              e("h4", { style: { fontSize: "13px", fontWeight: "bold", color: "#2c3e50", marginBottom: "6px" } }, "💡 Skincare Step Shopify Tagging Reference Guide"),
+              e("p", { style: { color: "#6d7175", fontSize: "12px", marginBottom: "16px", lineHeight: "1.4" } }, "To automatically categorize your live store products into standard curation routine slots, add these exact tags to your products inside your Shopify Admin details page:"),
+              
+              e("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "16px", marginBottom: "16px" } },
+                e("div", { style: { border: "1px solid #b8dfc4", background: "#e2f1e8", padding: "12px", borderRadius: "6px" } },
+                  e("div", { style: { fontWeight: "bold", fontSize: "12px", color: "#1e5128", marginBottom: "4px" } }, "🧴 Step 1: Cleanse"),
+                  e("p", { style: { fontSize: "11px", color: "#14532d", margin: 0, lineHeight: "1.4" } }, "Tag: ", e("code", { style: { background: "#fff", padding: "2px 4px", borderRadius: "3px" } }, "skin_care_step:cleanse"), " — Used for Face Wash, Foaming Wash, Milky Toners, and Oil Cleansers.")
+                ),
+                e("div", { style: { border: "1px solid #feebc8", background: "#fffaf0", padding: "12px", borderRadius: "6px" } },
+                  e("div", { style: { fontWeight: "bold", fontSize: "12px", color: "#7b341e", marginBottom: "4px" } }, "🔮 Step 2: Treat"),
+                  e("p", { style: { fontSize: "11px", color: "#7b341e", margin: 0, lineHeight: "1.4" } }, "Tag: ", e("code", { style: { background: "#fff", padding: "2px 4px", borderRadius: "3px" } }, "skin_care_step:treat"), " — Used for Active Serums, Treatment Oils, Sheet Masks, Peels, and Acne Patches.")
+                ),
+                e("div", { style: { border: "1px solid #bee3f8", background: "#ebf8ff", padding: "12px", borderRadius: "6px" } },
+                  e("div", { style: { fontWeight: "bold", fontSize: "12px", color: "#2b6cb0", marginBottom: "4px" } }, "❄️ Step 3: Restore"),
+                  e("p", { style: { fontSize: "11px", color: "#2b6cb0", margin: 0, lineHeight: "1.4" } }, "Tag: ", e("code", { style: { background: "#fff", padding: "2px 4px", borderRadius: "3px" } }, "skin_care_step:restore"), " — Used for Moisturizers, Barrier Repair Creams, Lotions, and SPF Day Creams.")
+                )
+              ),
+              
+              e("div", { style: { borderTop: "1px dashed #e2e8f0", paddingTop: "12px", marginTop: "12px" } },
+                e("div", { style: { fontWeight: "bold", fontSize: "12px", color: "#2c3e50", marginBottom: "6px" } }, "🧪 Target Skin Profile Tags (DNA Matching):"),
+                e("p", { style: { color: "#6d7175", fontSize: "11px", margin: "0 0 10px 0", lineHeight: "1.4" } }, "Boost matching accuracy by assigning skin DNA profile traits. The AI engine automatically parses these tags in real time:"),
+                e("div", { style: { display: "flex", gap: "8px", flexWrap: "wrap" } },
+                  [
+                    { label: "Oily DNA", tag: "skin_type:oily" },
+                    { label: "Dry DNA", tag: "skin_type:dry" },
+                    { label: "Acne Concern", tag: "concern:acne" },
+                    { label: "Aging Concern", tag: "concern:aging" },
+                    { label: "Nut Allergen", tag: "allergen:nuts" },
+                    { label: "Cruelty-Free", tag: "ethical:cruelty-free" }
+                  ].map((tagItem, idx) => e("span", { key: idx, style: { fontSize: "10px", padding: "3px 8px", background: "#f4f6f8", border: "1px solid #cbd5e0", borderRadius: "12px", fontFamily: "monospace" } }, tagItem.label + " ➔ " + tagItem.tag))
+                )
+              )
+            ),
 
-          // Exposing Allowed VIP Redemptions Points Catalog Mapping
-          e("div", { style: { borderTop: "1px solid #cbd5e0", paddingTop: "16px", marginBottom: "20px" } },
-            e("h4", { style: { fontSize: "14px", fontWeight: "600", color: "#2c3e50", marginBottom: "8px" } }, "✨ Configure Glow Points VIP Redemptions Catalog"),
-            e("p", { style: { color: "#6d7175", fontSize: "12px", marginBottom: "12px" } }, "Select which products are eligible for loyalty points redemption, and specify their points values."),
-            e("div", { style: { maxHeight: "200px", overflowY: "auto", border: "1px solid #e1e3e5", padding: "10px", borderRadius: "4px", backgroundColor: "#fafbfb" } },
-              inventory.map((item, idx) => {
-                const vipItem = adminVipRedemptions.find(x => x.variantId === item.productId);
-                const isChecked = !!vipItem;
-                const pointsVal = vipItem ? vipItem.points : Math.max(10, Math.round((item.price || 30.0) * 1.5));
-                
-                return e("div", { key: idx, style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "10px" } },
-                  e("div", { style: { display: "flex", alignItems: "center" } },
+            // Sub-card 3.2: Allowed Add-Ons Catalog Selection checklist
+            e("div", { style: { marginBottom: "24px", borderBottom: "1px dashed #cbd5e0", paddingBottom: "20px" } },
+              e("h4", { style: { fontSize: "13px", fontWeight: "bold", color: "#2c3e50", marginBottom: "6px" } }, "🛍️ Configure Allowed Subscription Add-Ons Catalog"),
+              e("p", { style: { color: "#6d7175", fontSize: "12px", marginBottom: "12px" } }, "Choose which product variants from your live Shopify catalog are permitted for one-time subscription add-ons inside visual cart slots and chatbots."),
+              e("div", { style: { maxHeight: "200px", overflowY: "auto", border: "1px solid #e1e3e5", padding: "10px", borderRadius: "4px", backgroundColor: "#fafbfb" } },
+                inventory.map((item, idx) => {
+                  const isChecked = adminAddons.includes(item.productId);
+                  return e("div", { key: idx, style: { display: "flex", alignItems: "center", marginBottom: "10px" } },
                     e("input", { 
                       type: "checkbox", 
-                      id: "vip_" + idx, 
+                      id: "addon_" + idx, 
                       checked: isChecked, 
-                      onChange: () => handleVipToggle(item.productId),
+                      onChange: () => handleAddonToggle(item.productId),
                       style: { marginRight: "10px" } 
                     }),
-                    e("label", { htmlFor: "vip_" + idx, style: { cursor: "pointer", fontSize: "13px" } }, 
+                    e("label", { htmlFor: "addon_" + idx, style: { cursor: "pointer", fontSize: "13px" } }, 
                       formatProductName(item.productName || item.productId)
                     )
-                  ),
-                  isChecked && e("div", { style: { display: "flex", alignItems: "center", gap: "6px" } },
-                    e("span", { style: { fontSize: "11px", color: "#4a5568" } }, "Points Required:"),
-                    e("input", { 
-                      type: "number", 
-                      min: "1", 
-                      value: pointsVal, 
-                      onChange: (ev) => handleVipPointsChange(item.productId, ev.target.value), 
-                      style: { width: "70px", padding: "4px 8px", borderRadius: "4px", border: "1px solid #cbd5e0", fontSize: "12px", textAlign: "right" } 
-                    })
-                  )
-                );
-              })
-            )
-          ),
+                  );
+                })
+              )
+            ),
 
-          e("button", { className: "button-primary", onClick: () => handleSaveThemeSettings(adminThemePrimary, adminThemeSecondary, adminMaxAddonLimit, adminMinStartDateDays, adminAddons, adminDiscountProfiles) }, "💾 Save Custom Portal Settings")
+            // Sub-card 3.3: Exposing Allowed VIP Redemptions Points Catalog Mapping
+            e("div", { style: { marginBottom: "20px" } },
+              e("h4", { style: { fontSize: "13px", fontWeight: "bold", color: "#2c3e50", marginBottom: "6px" } }, "✨ Configure Glow Points VIP Redemptions Catalog"),
+              e("p", { style: { color: "#6d7175", fontSize: "12px", marginBottom: "12px" } }, "Select which products are eligible for loyalty points redemption, and specify their points values."),
+              e("div", { style: { maxHeight: "200px", overflowY: "auto", border: "1px solid #e1e3e5", padding: "10px", borderRadius: "4px", backgroundColor: "#fafbfb" } },
+                inventory.map((item, idx) => {
+                  const vipItem = adminVipRedemptions.find(x => x.variantId === item.productId);
+                  const isChecked = !!vipItem;
+                  const pointsVal = vipItem ? vipItem.points : Math.max(10, Math.round((item.price || 30.0) * 1.5));
+                  
+                  return e("div", { key: idx, style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "10px" } },
+                    e("div", { style: { display: "flex", alignItems: "center" } },
+                      e("input", { 
+                        type: "checkbox", 
+                        id: "vip_" + idx, 
+                        checked: isChecked, 
+                        onChange: () => handleVipToggle(item.productId),
+                        style: { marginRight: "10px" } 
+                      }),
+                      e("label", { htmlFor: "vip_" + idx, style: { cursor: "pointer", fontSize: "13px" } }, 
+                        formatProductName(item.productName || item.productId)
+                      )
+                    ),
+                    isChecked && e("div", { style: { display: "flex", alignItems: "center", gap: "6px" } },
+                      e("span", { style: { fontSize: "11px", color: "#4a5568" } }, "Points Required:"),
+                      e("input", { 
+                        type: "number", 
+                        min: "1", 
+                        value: pointsVal, 
+                        onChange: (ev) => handleVipPointsChange(item.productId, ev.target.value), 
+                        style: { width: "70px", padding: "4px 8px", borderRadius: "4px", border: "1px solid #cbd5e0", fontSize: "12px", textAlign: "right" } 
+                      })
+                    )
+                  );
+                })
+              )
+            ),
+
+            e("button", { className: "button-primary", onClick: () => handleSaveThemeSettings(adminThemePrimary, adminThemeSecondary, adminMaxAddonLimit, adminMinStartDateDays, adminAddons, adminDiscountProfiles) }, "💾 Save Custom Portal Settings")
           )
         );
       };
