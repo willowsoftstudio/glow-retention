@@ -5726,9 +5726,69 @@ app.post("/api/admin/curations/create-sample-data", async (req, res) => {
 });
 
 // 4. Serve the beautiful embedded App UI Dashboard
-app.get("/", (req, res) => {
+app.get("/", async (req, res) => {
   const shop = req.query.shop as string;
   const apiKey = process.env.SHOPIFY_API_KEY || "";
+
+  let shopifyProducts = [
+    { variantId: "gid://shopify/ProductVariant/101", productName: "Vitamin C Brightening Serum", price: 30.00, cost: 12.00 },
+    { variantId: "gid://shopify/ProductVariant/102", productName: "Salicylic Acid Acne Cleanser", price: 25.00, cost: 9.00 },
+    { variantId: "gid://shopify/ProductVariant/103", productName: "Hyaluronic Acid Moisture Cream", price: 35.00, cost: 14.00 },
+    { variantId: "gid://shopify/ProductVariant/104", productName: "Retinol Anti-Aging Night Cream", price: 45.00, cost: 18.00 },
+    { variantId: "gid://shopify/ProductVariant/105", productName: "Ceramide Barrier Repair Cream", price: 40.00, cost: 16.00 }
+  ];
+
+  try {
+    if (shop) {
+      const dbSession = await prisma.session.findFirst({ where: { shop } });
+      if (dbSession?.accessToken && !dbSession.accessToken.includes("mock_")) {
+        const client = new shopify.api.clients.Graphql({ session: dbSession as any });
+        const response = await client.request(
+          `query {
+            products(first: 50) {
+              edges {
+                node {
+                  id
+                  title
+                  variants(first: 5) {
+                    edges {
+                      node {
+                        id
+                        price
+                        title
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }`
+        );
+        const edges = (response as any).data?.products?.edges || [];
+        const parsedProds: any[] = [];
+        edges.forEach((edge: any) => {
+          const prodTitle = edge.node.title;
+          const varEdges = edge.node.variants?.edges || [];
+          varEdges.forEach((vEdge: any) => {
+            const vId = vEdge.node.id;
+            const vTitle = vEdge.node.title;
+            const price = parseFloat(vEdge.node.price || "30.00");
+            parsedProds.push({
+              variantId: vId,
+              productName: prodTitle + (vTitle && vTitle !== "Default Title" ? " - " + vTitle : ""),
+              price: price,
+              cost: Math.round(price * 0.4 * 100) / 100
+            });
+          });
+        });
+        if (parsedProds.length > 0) {
+          shopifyProducts = parsedProds;
+        }
+      }
+    }
+  } catch (err: any) {
+    console.warn("[Shopify Products Load Error] Using default catalog fallbacks:", err.message);
+  }
 
   if (shop && shop.endsWith(".myshopify.com")) {
     const sanitizedShop = encodeURIComponent(shop);
@@ -5886,6 +5946,7 @@ app.get("/", (req, res) => {
   </style>
 </head>
 <body>
+  <textarea id="bootstrap-products" style="display:none;">${JSON.stringify(shopifyProducts).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")}</textarea>
   <div id="app"></div>
 
   <!-- Load App Bridge, React, and ReactDOM -->
@@ -5895,6 +5956,7 @@ app.get("/", (req, res) => {
 
   <script>
     const e = React.createElement;
+    const shopifyProducts = JSON.parse(document.getElementById("bootstrap-products")?.value || "[]");
 
     function App() {
       const [appBridgeReady, setAppBridgeReady] = React.useState(false);
