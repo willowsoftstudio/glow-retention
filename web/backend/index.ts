@@ -8253,7 +8253,8 @@ app.get("/", (req, res) => {
                 );
               })
             )
-          ),
+          )
+        ),
 
           // Card 3: Unified Shopify Product Tags System Reference & Whitelists card!
           e("div", { className: "card" },
