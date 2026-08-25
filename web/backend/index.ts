@@ -7243,43 +7243,6 @@ app.get("/", (req, res) => {
               className: "button-primary", 
               onClick: () => handleSaveMilestones(milestoneOrderCount, giftVariantIds, enableSafetyGuard) 
             }, "💾 Save Milestone Configuration")
-          ),
-
-          e("div", { className: "card", style: { marginTop: "20px" } },
-            e("h3", { style: { fontSize: "15px", fontWeight: "600", marginBottom: "8px", display: "flex", alignItems: "center" } }, "📋 Shopify Product Tags System Reference"),
-            e("p", { style: { color: "#6d7175", fontSize: "12px", marginBottom: "16px" } }, "Apply these standard tags in your Shopify Admin to let the Safety Guard personalize and audit your surprise unboxing gifts automatically:"),
-            
-            e("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "20px" } },
-              e("div", null,
-                e("h4", { style: { fontSize: "13px", fontWeight: "bold", color: "#2b6cb0", marginBottom: "8px" } }, "1. Skin Type Tags"),
-                e("ul", { style: { paddingLeft: "20px", fontSize: "12px", color: "#2d3748", lineHeight: "1.6" } },
-                  e("li", null, e("code", { style: { backgroundColor: "#edf2f7", padding: "2px 4px", borderRadius: "3px" } }, "skin:dry"), " — Matches dry skin type; excludes oily skin formulas."),
-                  e("li", null, e("code", { style: { backgroundColor: "#edf2f7", padding: "2px 4px", borderRadius: "3px" } }, "skin:oily"), " — Matches oily skin type; excludes heavy dry skin creams."),
-                  e("li", null, e("code", { style: { backgroundColor: "#edf2f7", padding: "2px 4px", borderRadius: "3px" } }, "skin:combination"), " — Matches combination oily/dry skins."),
-                  e("li", null, e("code", { style: { backgroundColor: "#edf2f7", padding: "2px 4px", borderRadius: "3px" } }, "skin:sensitive"), " — Required for sensitive/reactive skin types."),
-                  e("li", null, e("code", { style: { backgroundColor: "#edf2f7", padding: "2px 4px", borderRadius: "3px" } }, "skin:all"), " — Default option safe for all skin types.")
-                )
-              ),
-              e("div", null,
-                e("h4", { style: { fontSize: "13px", fontWeight: "bold", color: "#e53e3e", marginBottom: "8px" } }, "2. Allergen Exclusions"),
-                e("ul", { style: { paddingLeft: "20px", fontSize: "12px", color: "#2d3748", lineHeight: "1.6" } },
-                  e("li", null, e("code", { style: { backgroundColor: "#edf2f7", padding: "2px 4px", borderRadius: "3px" } }, "allergen:fragrance"), " — Filters out for subscribers sensitive to scents."),
-                  e("li", null, e("code", { style: { backgroundColor: "#edf2f7", padding: "2px 4px", borderRadius: "3px" } }, "allergen:sulfates"), " — Filters out for subscribers sensitive to active sulfates."),
-                  e("li", null, e("code", { style: { backgroundColor: "#edf2f7", padding: "2px 4px", borderRadius: "3px" } }, "allergen:parabens"), " — Excludes if customer profile flags paraben allergens."),
-                  e("li", null, e("code", { style: { backgroundColor: "#edf2f7", padding: "2px 4px", borderRadius: "3px" } }, "allergen:gluten"), " — Excludes for gluten-free/celiac preference profiles."),
-                  e("li", null, e("code", { style: { backgroundColor: "#edf2f7", padding: "2px 4px", borderRadius: "3px" } }, "allergen:nuts"), " — Excludes if formulas use nut-extracted carrier oils (almond, shea).")
-                )
-              ),
-              e("div", null,
-                e("h4", { style: { fontSize: "13px", fontWeight: "bold", color: "#319795", marginBottom: "8px" } }, "3. Climate Adaptation"),
-                e("ul", { style: { paddingLeft: "20px", fontSize: "12px", color: "#2d3748", lineHeight: "1.6" } },
-                  e("li", null, e("code", { style: { backgroundColor: "#edf2f7", padding: "2px 4px", borderRadius: "3px" } }, "climate:dry"), " — Curates dry skin/climate formula hydration."),
-                  e("li", null, e("code", { style: { backgroundColor: "#edf2f7", padding: "2px 4px", borderRadius: "3px" } }, "climate:humid"), " — Curates oil-control and deep clarifying masks."),
-                  e("li", null, e("code", { style: { backgroundColor: "#edf2f7", padding: "2px 4px", borderRadius: "3px" } }, "climate:cold"), " — Curates thick skin barrier protection creams."),
-                  e("li", null, e("code", { style: { backgroundColor: "#edf2f7", padding: "2px 4px", borderRadius: "3px" } }, "climate:temperate"), " — Safe for seasonal moderate climates.")
-                )
-              )
-            )
           )
         );
       };
@@ -8296,6 +8259,44 @@ app.get("/", (req, res) => {
               )
             ),
 
+            // Sub-card 3.1b: Milestones & Unboxing Gift Tags Reference Guide
+            e("div", { style: { marginBottom: "24px", borderBottom: "1px dashed #cbd5e0", paddingBottom: "20px" } },
+              e("h4", { style: { fontSize: "13px", fontWeight: "bold", color: "#2c3e50", marginBottom: "6px" } }, "📋 Milestones & Unboxing Gift Tags Reference Guide"),
+              e("p", { style: { color: "#6d7175", fontSize: "12px", marginBottom: "16px", lineHeight: "1.4" } }, "Apply these standard tags in your Shopify Admin to let the Safety Guard personalize and audit your surprise unboxing gifts automatically:"),
+              
+              e("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "20px" } },
+                e("div", null,
+                  e("h4", { style: { fontSize: "12px", fontWeight: "bold", color: "#2b6cb0", marginBottom: "8px" } }, "1. Skin Type Tags"),
+                  e("ul", { style: { paddingLeft: "20px", fontSize: "11px", color: "#2d3748", lineHeight: "1.6" } },
+                    e("li", null, e("code", { style: { backgroundColor: "#edf2f7", padding: "2px 4px", borderRadius: "3px" } }, "skin:dry"), " — Matches dry skin type; excludes oily formulas."),
+                    e("li", null, e("code", { style: { backgroundColor: "#edf2f7", padding: "2px 4px", borderRadius: "3px" } }, "skin:oily"), " — Matches oily skin type; excludes heavy creams."),
+                    e("li", null, e("code", { style: { backgroundColor: "#edf2f7", padding: "2px 4px", borderRadius: "3px" } }, "skin:combination"), " — Matches combination oily/dry skins."),
+                    e("li", null, e("code", { style: { backgroundColor: "#edf2f7", padding: "2px 4px", borderRadius: "3px" } }, "skin:sensitive"), " — Required for sensitive skin types."),
+                    e("li", null, e("code", { style: { backgroundColor: "#edf2f7", padding: "2px 4px", borderRadius: "3px" } }, "skin:all"), " — Default option safe for all skin types.")
+                  )
+                ),
+                e("div", null,
+                  e("h4", { style: { fontSize: "12px", fontWeight: "bold", color: "#e53e3e", marginBottom: "8px" } }, "2. Allergen Exclusions"),
+                  e("ul", { style: { paddingLeft: "20px", fontSize: "11px", color: "#2d3748", lineHeight: "1.6" } },
+                    e("li", null, e("code", { style: { backgroundColor: "#edf2f7", padding: "2px 4px", borderRadius: "3px" } }, "allergen:fragrance"), " — Filters out for subscribers sensitive to scents."),
+                    e("li", null, e("code", { style: { backgroundColor: "#edf2f7", padding: "2px 4px", borderRadius: "3px" } }, "allergen:sulfates"), " — Filters out for subscribers sensitive to active sulfates."),
+                    e("li", null, e("code", { style: { backgroundColor: "#edf2f7", padding: "2px 4px", borderRadius: "3px" } }, "allergen:parabens"), " — Excludes if customer profile flags paraben allergens."),
+                    e("li", null, e("code", { style: { backgroundColor: "#edf2f7", padding: "2px 4px", borderRadius: "3px" } }, "allergen:gluten"), " — Excludes for gluten-free/celiac preference profiles."),
+                    e("li", null, e("code", { style: { backgroundColor: "#edf2f7", padding: "2px 4px", borderRadius: "3px" } }, "allergen:nuts"), " — Excludes if formulas use nut-extracted carrier oils (almond, shea).")
+                  )
+                ),
+                e("div", null,
+                  e("h4", { style: { fontSize: "12px", fontWeight: "bold", color: "#319795", marginBottom: "8px" } }, "3. Climate Adaptation"),
+                  e("ul", { style: { paddingLeft: "20px", fontSize: "11px", color: "#2d3748", lineHeight: "1.6" } },
+                    e("li", null, e("code", { style: { backgroundColor: "#edf2f7", padding: "2px 4px", borderRadius: "3px" } }, "climate:dry"), " — Curates dry skin/climate formula hydration."),
+                    e("li", null, e("code", { style: { backgroundColor: "#edf2f7", padding: "2px 4px", borderRadius: "3px" } }, "climate:humid"), " — Curates oil-control and deep clarifying masks."),
+                    e("li", null, e("code", { style: { backgroundColor: "#edf2f7", padding: "2px 4px", borderRadius: "3px" } }, "climate:cold"), " — Curates thick skin barrier protection creams."),
+                    e("li", null, e("code", { style: { backgroundColor: "#edf2f7", padding: "2px 4px", borderRadius: "3px" } }, "climate:temperate"), " — Safe for seasonal moderate climates.")
+                  )
+                )
+              )
+            ),
+
             // Sub-card 3.2: Allowed Add-Ons Catalog Selection checklist
             e("div", { style: { marginBottom: "24px", borderBottom: "1px dashed #cbd5e0", paddingBottom: "20px" } },
               e("h4", { style: { fontSize: "13px", fontWeight: "bold", color: "#2c3e50", marginBottom: "6px" } }, "🛍️ Configure Allowed Subscription Add-Ons Catalog"),
@@ -8316,6 +8317,33 @@ app.get("/", (req, res) => {
                     )
                   );
                 })
+              ),
+              e("div", { style: { display: "flex", gap: "10px", marginTop: "12px", alignItems: "center" } },
+                e("select", {
+                  id: "add_addon_select",
+                  style: { flex: 1, padding: "8px", borderRadius: "6px", border: "1px solid #cbd5e0", fontSize: "13px", background: "white", outline: "none" }
+                },
+                  e("option", { value: "" }, "Select product variant to whitelist..."),
+                  shopifyProducts
+                    .filter(p => !adminAddons.includes(p.variantId))
+                    .map((p, idx) => e("option", { key: idx, value: p.variantId }, formatProductName(p.productName) + " ($" + p.price.toFixed(2) + ")"))
+                ),
+                e("button", {
+                  className: "button-secondary",
+                  style: { padding: "8px 14px", fontSize: "12px", backgroundColor: "#008060", color: "white", border: "none", borderRadius: "6px", cursor: "pointer", fontWeight: "bold" },
+                  onClick: () => {
+                    const selectEl = document.getElementById("add_addon_select");
+                    const val = selectEl ? selectEl.value : "";
+                    if (val) {
+                      setAdminAddons([...adminAddons, val]);
+                      const matched = shopifyProducts.find(x => x.variantId === val);
+                      if (matched && !inventory.some(x => x.productId === val)) {
+                        setInventory([...inventory, { productId: val, productName: matched.productName, price: matched.price, cost: matched.cost }]);
+                      }
+                      if (selectEl) selectEl.value = "";
+                    }
+                  }
+                }, "➕ Whitelist Add-on Variant")
               )
             ),
 
@@ -8354,6 +8382,34 @@ app.get("/", (req, res) => {
                     )
                   );
                 })
+              ),
+              e("div", { style: { display: "flex", gap: "10px", marginTop: "12px", alignItems: "center" } },
+                e("select", {
+                  id: "add_vip_select",
+                  style: { flex: 1, padding: "8px", borderRadius: "6px", border: "1px solid #cbd5e0", fontSize: "13px", background: "white", outline: "none" }
+                },
+                  e("option", { value: "" }, "Select product variant to whitelist for points..."),
+                  shopifyProducts
+                    .filter(p => !adminVipRedemptions.some(x => x.variantId === p.variantId))
+                    .map((p, idx) => e("option", { key: idx, value: p.variantId }, formatProductName(p.productName) + " ($" + p.price.toFixed(2) + ")"))
+                ),
+                e("button", {
+                  className: "button-secondary",
+                  style: { padding: "8px 14px", fontSize: "12px", backgroundColor: "#008060", color: "white", border: "none", borderRadius: "6px", cursor: "pointer", fontWeight: "bold" },
+                  onClick: () => {
+                    const selectEl = document.getElementById("add_vip_select");
+                    const val = selectEl ? selectEl.value : "";
+                    if (val) {
+                      const matched = shopifyProducts.find(x => x.variantId === val);
+                      const defaultPoints = matched ? Math.max(10, Math.round(matched.price * 1.5)) : 50;
+                      setAdminVipRedemptions([...adminVipRedemptions, { variantId: val, points: defaultPoints }]);
+                      if (matched && !inventory.some(x => x.productId === val)) {
+                        setInventory([...inventory, { productId: val, productName: matched.productName, price: matched.price, cost: matched.cost }]);
+                      }
+                      if (selectEl) selectEl.value = "";
+                    }
+                  }
+                }, "➕ Whitelist VIP Points Variant")
               )
             ),
 
