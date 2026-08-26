@@ -771,6 +771,38 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
   }
 });
 
+  // Timezone-Aware Scheduled Publishing Evaluator (For campaigns, themed boxes, and holiday bundles)
+  function isEntityLive(entity: any): boolean {
+    if (!entity) return false;
+    if (entity.isActive === false) return false;
+    if (!entity.publishStartDate && !entity.publishEndDate) return true;
+    
+    try {
+      const now = new Date();
+      const tz = entity.timezone || "UTC";
+      
+      if (entity.publishStartDate) {
+        const startStr = `${entity.publishStartDate}T${entity.publishStartTime || "00:00"}:00`;
+        const startObj = new Date(startStr);
+        const nowInTz = new Date(now.toLocaleString("en-US", { timeZone: tz }));
+        const startInTz = new Date(startObj.toLocaleString("en-US", { timeZone: tz }));
+        if (nowInTz < startInTz) return false;
+      }
+      
+      if (entity.publishEndDate) {
+        const endStr = `${entity.publishEndDate}T${entity.publishEndTime || "23:59"}:59`;
+        const endObj = new Date(endStr);
+        const nowInTz = new Date(now.toLocaleString("en-US", { timeZone: tz }));
+        const endInTz = new Date(endObj.toLocaleString("en-US", { timeZone: tz }));
+        if (nowInTz > endInTz) return false;
+      }
+      
+      return true;
+    } catch (e) {
+      return !!entity.isActive;
+    }
+  }
+
   // Storefront Session Loader (For Customer Storefront-facing Routes - No Admin Auth required!)
   async function validateStorefrontSession(req: express.Request, res: express.Response, next: express.NextFunction) {
     if (isTestMode) {
@@ -1151,13 +1183,7 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
           }
         } else if (type === "CAMPAIGN") {
           const campaigns: any[] = merchantConfig?.campaigns || [];
-          const now = new Date();
-          const activeOverlapping = campaigns.filter(c => {
-            if (c.isActive === false) return false;
-            const start = new Date(c.startDate);
-            const end = new Date(c.endDate);
-            return now >= start && now <= end;
-          });
+          const activeOverlapping = campaigns.filter(c => isEntityLive(c));
           if (activeOverlapping.length > 0) {
             activeOverlapping.sort((a, b) => parseInt(b.priority || "1") - parseInt(a.priority || "1"));
             const highestPriorityCampaign = activeOverlapping[0];
@@ -1241,13 +1267,7 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
           }
         } else if (type === "CAMPAIGN") {
           const campaigns: any[] = merchantConfig?.campaigns || [];
-          const now = new Date();
-          const activeOverlapping = campaigns.filter(c => {
-            if (c.isActive === false) return false;
-            const start = new Date(c.startDate);
-            const end = new Date(c.endDate);
-            return now >= start && now <= end;
-          });
+          const activeOverlapping = campaigns.filter(c => isEntityLive(c));
           if (activeOverlapping.length > 0) {
             activeOverlapping.sort((a, b) => parseInt(b.priority || "1") - parseInt(a.priority || "1"));
             const highestPriorityCampaign = activeOverlapping[0];
@@ -1599,6 +1619,10 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
         }
       }
 
+      const merchantConfig = await getMerchantConfig(req.body.session.shop);
+      const themedBoxes: any[] = merchantConfig.themedBoxes || [];
+      const selectedThemedBox = themedBoxes.find(x => x.id === tier);
+
       if (tier === "NONE") {
         // Clear contract items for a clean slate in BYOB mode! Don't add products by default!
         const contract = await prisma.subscriptionContract.findFirst({
@@ -1610,7 +1634,7 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
             data: { items: "[]" }
           });
         }
-      } else if (shopifyProducts.length > 0) {
+      } else if (shopifyProducts.length > 0 || selectedThemedBox) {
         // Curation engine on live products matching customer DNA profile concerns & allergens
         const profileAllergens = profile.allergens || [];
         const profileConcerns = profile.concerns || [];
@@ -1669,7 +1693,19 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
         const bestRestore = restoreList[0] || allSorted[2] || allSorted[0];
 
         const selectedItems = [];
-        if (tier === "STARTER" && bestCleanse) {
+        if (selectedThemedBox) {
+          selectedThemedBox.items.forEach((vId: string) => {
+            const prod = shopifyProducts.find(p => p.variantId === vId);
+            selectedItems.push({
+              variantId: vId,
+              productName: prod ? prod.productName : "Themed Routine Product",
+              price: prod ? prod.price : 35.00,
+              quantity: 1,
+              isFreeGift: false,
+              isAddOn: false
+            });
+          });
+        } else if (tier === "STARTER" && bestCleanse) {
           selectedItems.push({
             variantId: bestCleanse.variantId,
             productName: bestCleanse.productName,
@@ -2080,13 +2116,7 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
           }
         } else if (type === "CAMPAIGN") {
           const campaigns: any[] = allConfigs?.campaigns || [];
-          const now = new Date();
-          const activeOverlapping = campaigns.filter(c => {
-            if (c.isActive === false) return false;
-            const start = new Date(c.startDate);
-            const end = new Date(c.endDate);
-            return now >= start && now <= end;
-          });
+          const activeOverlapping = campaigns.filter(c => isEntityLive(c));
           if (activeOverlapping.length > 0) {
             activeOverlapping.sort((a, b) => parseInt(b.priority || "1") - parseInt(a.priority || "1"));
             const highestPriorityCampaign = activeOverlapping[0];
@@ -2672,6 +2702,8 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
       const priceLow = ${boxPriceLow};
       const priceMedium = ${boxPriceMedium};
       const priceHigh = ${boxPriceHigh};
+      const merchantThemedBoxes = ${JSON.stringify((allConfigs.themedBoxes || []).filter((x: any) => isEntityLive(x)))};
+      const merchantOneOffBundles = ${JSON.stringify((allConfigs.oneOffBundles || []).filter((x: any) => isEntityLive(x)))};
 
       const [selectedGiftId, setSelectedGiftId] = React.useState("");
       const [claimingGift, setClaimingGift] = React.useState(false);
@@ -2707,6 +2739,12 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
           }
         })
         .catch(err => { setActivating(false); console.error(err); });
+      };
+
+      const handleUpdateFrequency = (days) => {
+        if (!contract) {
+          setRoutineFrequency(days);
+        }
       };
 
       // Split visual routine selections: core subscription variants vs. one-time addon variants
@@ -2818,14 +2856,16 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
 
       const totalPrice = React.useMemo(() => {
         const isCuration = ["STARTER", "PRO", "ENTERPRISE"].includes(currentTier);
+        const themedBox = merchantThemedBoxes.find(x => x.id === currentTier);
         
         let coreSum = 0;
-        if (isCuration) {
-          // Resolve standard flat-rate box price configured in merchant settings
+        if (isCuration || themedBox) {
+          // Resolve standard flat-rate box price configured in merchant settings or custom themed box price
           let baseBoxPrice = 0;
           if (currentTier === "STARTER") baseBoxPrice = priceLow;
           else if (currentTier === "PRO") baseBoxPrice = priceMedium;
           else if (currentTier === "ENTERPRISE") baseBoxPrice = priceHigh;
+          else if (themedBox) baseBoxPrice = themedBox.price;
 
           // Enforce promo discounts applied directly on their curated flat-rate total
           const contractDiscount = contract ? (contract.discountPercentage || 0) : 0;
@@ -4138,26 +4178,39 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
             // Visual Curation Tier Switch & Setup Status Headers
             (() => {
               const isCuration = ["STARTER", "PRO", "ENTERPRISE"].includes(currentTier);
-              if (isCuration) {
+              const isThemedBox = merchantThemedBoxes.some(x => x.id === currentTier);
+              
+              if (isCuration || isThemedBox) {
+                const headerTitle = isCuration ? "✨ Personalized Routine Edit Active" : "🏠 The Glow House Specialty Edit Active";
+                const headerSubtitle = isCuration ? "Our skincare specialists have put together a custom routine based on your skin profile traits. You can preview, adjust, and swap alternative products below!" : "Our signature in-house routine formulated without profile gating. It's the ultimate seasonal specialty edit.";
+                
                 return e("div", null,
                   e("div", { style: { background: "var(--primary-light)", border: "1.5px dashed var(--primary-color)", borderRadius: "8px", padding: "16px", marginBottom: "16px" } },
                     e("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px" } },
                       e("div", { style: { textAlign: "left" } },
-                        e("div", { style: { fontSize: "12px", fontWeight: "700", color: "var(--primary-color)", display: "flex", alignItems: "center", gap: "6px" } }, "✨ Personalized AI Curation Plan Active"),
-                        e("div", { style: { fontSize: "10px", color: "#718096", marginTop: "2px" } }, "Active Tier: " + currentTier + " Box. Curation override slots active.")
+                        e("div", { style: { fontSize: "12px", fontWeight: "700", color: "var(--primary-color)", display: "flex", alignItems: "center", gap: "6px" } }, headerTitle),
+                        e("div", { style: { fontSize: "10px", color: "#718096", marginTop: "4px", lineHeight: "1.4" } }, headerSubtitle)
                       ),
-                      e("button", { style: { padding: "4px 8px", fontSize: "10px", color: "#4a5568", border: "1px solid #cbd5e0", background: "white", borderRadius: "4px", cursor: "pointer", fontWeight: "bold" }, onClick: () => switchSubscriptionMode("NONE") }, "Switch to BYOB Box")
+                      e("button", { style: { padding: "4px 8px", fontSize: "10px", color: "#4a5568", border: "1px solid #cbd5e0", background: "white", borderRadius: "4px", cursor: "pointer", fontWeight: "bold", marginLeft: "12px" }, onClick: () => switchSubscriptionMode("NONE") }, "Switch to BYOB Box")
                     ),
                     e("div", { style: { display: "flex", alignItems: "center", gap: "8px", borderTop: "1px dashed var(--primary-color)", paddingTop: "10px" } },
-                      e("span", { style: { fontSize: "11px", fontWeight: "bold", color: "#4a5568" } }, "Change Curation Level:"),
+                      e("span", { style: { fontSize: "11px", fontWeight: "bold", color: "#4a5568" } }, "Change Routine Mode:"),
                       e("select", {
                         value: currentTier,
                         onChange: (ev) => switchSubscriptionMode(ev.target.value),
                         style: { padding: "4px 8px", borderRadius: "4px", border: "1px solid var(--primary-color)", fontSize: "11px", outline: "none", background: "white", cursor: "pointer" }
                       },
-                        e("option", { value: "STARTER" }, "STARTER Box ($30/mo)"),
-                        e("option", { value: "PRO" }, "PRO Box ($60/mo)"),
-                        e("option", { value: "ENTERPRISE" }, "ENTERPRISE Box ($120/mo)")
+                        e("option", { value: "NONE" }, "Build-Your-Own Box (BYOB)"),
+                        e("optgroup", { label: "✨ Personalized Routine Edits (Customized for you)" },
+                          e("option", { value: "STARTER" }, "Personalized Starter Routine ($30/mo)"),
+                          e("option", { value: "PRO" }, "Personalized Pro Routine ($60/mo)"),
+                          e("option", { value: "ENTERPRISE" }, "Personalized Bespoke Routine ($120/mo)")
+                        ),
+                        merchantThemedBoxes.length > 0 && e("optgroup", { label: "🏠 The Glow House Specialty Edits (Seasonal Curations)" },
+                          merchantThemedBoxes
+                            .filter(box => box.isActive)
+                            .map(box => e("option", { key: box.id, value: box.id }, box.name + " ($" + box.price.toFixed(2) + ")"))
+                        )
                       )
                     )
                   ),
@@ -4353,31 +4406,110 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
 
             milestoneSelectorWidget,
 
+            // Limited-Edition Holiday & Special Occasions One-Off Gift Sets (Non-Subscription Single Purchase)
+            merchantOneOffBundles.filter(b => b.isActive).length > 0 && e("div", { style: { marginBottom: "20px", background: "#fff5f5", padding: "16px", borderRadius: "12px", border: "1.5px dashed #c53030" } },
+              e("div", { style: { fontSize: "11px", fontWeight: "700", color: "#9b2c2c", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "8px" } }, "🎄 Limited-Edition Holiday & Special Occasion Gift Sets"),
+              e("p", { style: { fontSize: "11px", color: "#9b2c2c", margin: "0 0 12px 0", fontStyle: "italic", lineHeight: "1.4" } }, "Unwrap limited-edition, non-recurring routines designed for holidays and special events. These ship once inside your upcoming box and do not stack on your monthly subscription plan!"),
+              e("div", { style: { display: "flex", flexDirection: "column", gap: "10px" } },
+                merchantOneOffBundles
+                  .filter(b => b.isActive)
+                  .map(bundle => {
+                    const isAlreadyAdded = bundle.items.every(vId => addonVariants.includes(vId));
+                    
+                    const addOneOffBundle = () => {
+                      if (addonVariants.length + bundle.items.length > maxAddonLimit) {
+                        alert("Adding this holiday bundle (" + bundle.items.length + " products) would exceed your dynamic box add-on slot capacity limit of " + maxAddonLimit + "!");
+                        return;
+                      }
+                      const merged = [...addonVariants, ...bundle.items];
+                      setAddonVariants(merged);
+                      setNotification("🎁 Limited-Edition " + bundle.name + " packed into your upcoming box shipment!");
+                      setTimeout(() => setNotification(null), 3000);
+                    };
+
+                    return e("div", { key: bundle.id, style: { background: "#fff", border: "1.5px solid #feb2b2", padding: "12px", borderRadius: "8px", textAlign: "left", position: "relative" } },
+                      e("div", { style: { fontWeight: "bold", fontSize: "13px", color: "#2d3748" } }, bundle.name),
+                      e("div", { style: { fontSize: "11px", color: "#c53030", fontWeight: "bold", margin: "2px 0 6px 0" } }, "🎄 One-Time Charge ➔ $" + bundle.price.toFixed(2)),
+                      e("p", { style: { fontSize: "11px", color: "#4a5568", margin: "0 0 10px 0", lineHeight: "1.4", fontStyle: "italic" } }, bundle.description || "Holiday special edition."),
+                      
+                      e("button", {
+                        className: "btn-primary",
+                        disabled: isAlreadyAdded || activating,
+                        onClick: addOneOffBundle,
+                        style: {
+                          width: "100%",
+                          padding: "8px",
+                          fontSize: "11px",
+                          background: isAlreadyAdded ? "#e2e8f0" : "#c53030",
+                          borderColor: isAlreadyAdded ? "#cbd5e0" : "#c53030",
+                          color: isAlreadyAdded ? "#a0aec0" : "white",
+                          cursor: isAlreadyAdded ? "not-allowed" : "pointer"
+                        }
+                      }, isAlreadyAdded ? "🎄 Packed in Upcoming Box ✓" : "🛒 Pack limited-Edition Gift Set")
+                    );
+                  })
+              )
+            ),
+
             unlockedRewardsWidget,
 
-            // Select Delivery Interval & Start Date (if no contract exists yet)
-            !contract && e("div", { style: { display: "flex", gap: "12px", marginBottom: "20px", flexWrap: "wrap" } },
-              e("div", { style: { flex: 1, minWidth: "160px" } },
-                e("label", { style: { display: "block", fontSize: "12px", fontWeight: "700", color: "#4a5568", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "8px" } }, "Delivery Interval"),
-                e("select", { 
-                  value: routineFrequency, 
-                  onChange: (ev) => setRoutineFrequency(parseInt(ev.target.value)),
-                  style: { width: "100%", padding: "12px", borderRadius: "10px", border: "1px solid #cbd5e0", fontSize: "14px", background: "white", outline: "none", cursor: "pointer" }
-                },
-                  e("option", { value: 15 }, "Deliver Every 15 Days"),
-                  e("option", { value: 30 }, "Deliver Every 30 Days (Best Value)"),
-                  e("option", { value: 45 }, "Deliver Every 45 Days")
+            // Shipping, Billing & Checkout Summary Widget (Dynamic billing/shipping controls!)
+            e("div", { className: "card", style: { border: "1px solid #cbd5e0", padding: "16px", borderRadius: "12px", background: "#f8fafc", marginBottom: "20px" } },
+              e("div", { style: { fontSize: "11px", fontWeight: "700", color: "#4a5568", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "12px" } }, "💳 Shipping, Billing & Subscription Summary"),
+              
+              e("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px", marginBottom: "12px", textAlign: "left" } },
+                e("div", null,
+                  e("div", { style: { fontSize: "10px", fontWeight: "bold", color: "#718096", textTransform: "uppercase" } }, "Shipping Address"),
+                  e("div", { style: { fontSize: "12px", color: "#2d3748", marginTop: "2px" } }, (profile?.name || "Jessica Alchemist") + ", 555 Beauty Way, Suite 400, Beverly Hills, CA 90210")
+                ),
+                e("div", null,
+                  e("div", { style: { fontSize: "10px", fontWeight: "bold", color: "#718096", textTransform: "uppercase" } }, "Payment Method"),
+                  e("div", { style: { fontSize: "12px", color: "#2d3748", marginTop: "2px", display: "flex", alignItems: "center", gap: "4px" } }, "💳 Visa ending in 4242")
                 )
               ),
-              e("div", { style: { flex: 1, minWidth: "160px" } },
-                e("label", { style: { display: "block", fontSize: "12px", fontWeight: "700", color: "#4a5568", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "8px" } }, "Start Date"),
+
+              e("div", { style: { borderTop: "1px dashed #cbd5e0", paddingTop: "12px", textAlign: "left" } },
+                e("div", { style: { fontSize: "10px", fontWeight: "bold", color: "#718096", textTransform: "uppercase", marginBottom: "6px" } }, "Delivery Frequency"),
+                e("div", { style: { display: "flex", gap: "8px" } },
+                  [30, 60, 90].map(days => {
+                    const active = contract ? (contract.frequencyDays === days) : (routineFrequency === days);
+                    return e("button", {
+                      key: days,
+                      onClick: () => handleUpdateFrequency(days),
+                      style: {
+                        flex: 1,
+                        padding: "8px",
+                        fontSize: "12px",
+                        fontWeight: "bold",
+                        borderRadius: "6px",
+                        border: "1.5px solid " + (active ? "var(--primary-color)" : "#cbd5e0"),
+                        background: active ? "var(--primary-color)" : "white",
+                        color: active ? "white" : "#4a5568",
+                        cursor: "pointer",
+                        transition: "all 0.3s"
+                      }
+                    }, days + " Days");
+                  })
+                )
+              ),
+
+              !contract && e("div", { style: { borderTop: "1px dashed #cbd5e0", paddingTop: "12px", marginTop: "12px", textAlign: "left" } },
+                e("label", { style: { display: "block", fontSize: "10px", fontWeight: "bold", color: "#718096", textTransform: "uppercase", marginBottom: "6px" } }, "Select Box Start Date"),
                 e("input", { 
                   type: "date", 
                   min: getMinDateStr(),
                   value: customStartDate,
                   onChange: (ev) => setCustomStartDate(ev.target.value),
-                  style: { width: "100%", padding: "12px", borderRadius: "10px", border: "1px solid #cbd5e0", fontSize: "14px", background: "white", outline: "none", cursor: "pointer", boxSizing: "border-box" }
+                  style: { width: "100%", padding: "10px", borderRadius: "6px", border: "1px solid #cbd5e0", fontSize: "12px", background: "white", outline: "none", cursor: "pointer", boxSizing: "border-box" }
                 })
+              ),
+
+              e("div", { style: { borderTop: "1px dashed #cbd5e0", paddingTop: "10px", marginTop: "10px", fontSize: "10px", color: "#718096", textAlign: "left", lineHeight: "1.4" } },
+                "🔔 ", e("strong", null, "Subscription Charge Notice:"), " You have successfully subscribed. By saving changes or activating your box, your credit card ending in 4242 will be automatically charged ",
+                e("strong", null, "$" + totalPrice.toFixed(2)),
+                " every ",
+                e("strong", null, contract ? (contract.frequencyDays || 30) : routineFrequency),
+                " days on dynamic recurring unboxing cycles."
               )
             ),
 
@@ -5241,6 +5373,8 @@ app.post("/api/admin/curations/generate", async (req, res) => {
       return res.status(403).json({ error: "Upgrade required to run adaptive curation." });
     }
 
+    const merchantConfig = dbSession?.themeSettingsJson ? JSON.parse(dbSession.themeSettingsJson) : {};
+
     const priceLow = dbSession?.boxPriceLow || 30.0;
     const priceMedium = dbSession?.boxPriceMedium || 60.0;
     const priceHigh = dbSession?.boxPriceHigh || 120.0;
@@ -5379,9 +5513,26 @@ app.post("/api/admin/curations/generate", async (req, res) => {
     let createdCount = 0;
 
     for (const profile of profiles) {
-      let targetPrice = priceMedium;
-      if (profile.priceSensitivity === "low") targetPrice = priceLow;
-      if (profile.priceSensitivity === "high") targetPrice = priceHigh;
+      // Determine their actual curated plan parameters
+      const currentTier = profile.subscription?.tier || "NONE";
+      if (currentTier === "NONE") continue; // BYOB users build recurring boxes manually
+
+      let boxPrice = priceLow;
+      let maxCap = 45; // default Starter Cap
+      
+      if (currentTier === "STARTER") {
+        boxPrice = priceLow;
+        const cap = merchantConfig?.starterValueCap !== undefined ? parseInt(merchantConfig.starterValueCap) : 45;
+        maxCap = cap;
+      } else if (currentTier === "PRO") {
+        boxPrice = priceMedium;
+        const cap = merchantConfig?.proValueCap !== undefined ? parseInt(merchantConfig.proValueCap) : 80;
+        maxCap = cap;
+      } else if (currentTier === "ENTERPRISE") {
+        boxPrice = priceHigh;
+        const cap = merchantConfig?.enterpriseValueCap !== undefined ? parseInt(merchantConfig.enterpriseValueCap) : 150;
+        maxCap = cap;
+      }
 
       const profileConcerns = (profile.concerns || []).map(c => c.toLowerCase());
       const profileSkinType = (profile.skinType || "dry").toLowerCase();
@@ -5457,7 +5608,7 @@ app.post("/api/admin/curations/generate", async (req, res) => {
       });
 
       const activeCandidates = candidates
-        .filter(c => c.score > 0)
+        .filter(c => c.score > 0 && c.stockLevel > 0) // Strictly filter out sold out items!
         .sort((a, b) => b.score - a.score);
 
       let chosenItems = [];
@@ -5467,10 +5618,10 @@ app.post("/api/admin/curations/generate", async (req, res) => {
       for (const cand of activeCandidates) {
         const nextPrice = currentPriceSum + cand.price;
         const nextCost = currentCostSum + cand.cost;
-        const nextMargin = nextPrice > 0 ? ((nextPrice - nextCost) / nextPrice) * 100 : 0;
+        const boxMargin = boxPrice > 0 ? ((boxPrice - nextCost) / boxPrice) * 100 : 0;
 
-        // Strict Hard Price Ceiling Enforced: Never exceed the customer's tier target price
-        if (nextPrice <= targetPrice && nextMargin >= targetMargin - 15) {
+        // Compare items price vs max price budget cap & protect flat-rate profit threshold
+        if (nextPrice <= maxCap && boxMargin >= targetMargin - 15) {
           chosenItems.push({
             variantId: cand.id,
             productName: cand.title,
@@ -5506,7 +5657,7 @@ app.post("/api/admin/curations/generate", async (req, res) => {
           customerId: profile.customerId,
           customerName: profile.name,
           totalPrice: parseFloat(currentPriceSum.toFixed(2)),
-          targetPrice: parseFloat(targetPrice.toFixed(2)),
+          targetPrice: parseFloat(boxPrice.toFixed(2)),
           suggestedItems: chosenItems
         }
       });
@@ -6107,6 +6258,31 @@ app.get("/", async (req, res) => {
       const [adminCampaignBonus, setAdminCampaignBonus] = React.useState("2");
       const [adminCampaigns, setAdminCampaigns] = React.useState([]);
       const [adminCampaignPriority, setAdminCampaignPriority] = React.useState("1");
+      const [adminCampaignStartTime, setAdminCampaignStartTime] = React.useState("00:00");
+      const [adminCampaignEndTime, setAdminCampaignEndTime] = React.useState("23:59");
+      const [adminCampaignTimezone, setAdminCampaignTimezone] = React.useState("UTC");
+      const [adminThemedBoxes, setAdminThemedBoxes] = React.useState([]);
+      const [adminNewThemedName, setAdminNewThemedName] = React.useState("");
+      const [adminNewThemedPrice, setAdminNewThemedPrice] = React.useState("45.00");
+      const [adminNewThemedSchedule, setAdminNewThemedSchedule] = React.useState("Monthly");
+      const [adminNewThemedDesc, setAdminNewThemedDesc] = React.useState("");
+      const [adminNewThemedItems, setAdminNewThemedItems] = React.useState([]);
+      const [adminThemedStartTime, setAdminThemedStartTime] = React.useState("00:00");
+      const [adminThemedEndTime, setAdminThemedEndTime] = React.useState("23:59");
+      const [adminThemedTimezone, setAdminThemedTimezone] = React.useState("UTC");
+      const [adminThemedStartDate, setAdminThemedStartDate] = React.useState("");
+      const [adminThemedEndDate, setAdminThemedEndDate] = React.useState("");
+
+      const [adminOneOffBundles, setAdminOneOffBundles] = React.useState([]);
+      const [adminNewOneOffName, setAdminNewOneOffName] = React.useState("");
+      const [adminNewOneOffPrice, setAdminNewOneOffPrice] = React.useState("75.00");
+      const [adminNewOneOffDesc, setAdminNewOneOffDesc] = React.useState("");
+      const [adminNewOneOffItems, setAdminNewOneOffItems] = React.useState([]);
+      const [adminOneOffStartTime, setAdminOneOffStartTime] = React.useState("00:00");
+      const [adminOneOffEndTime, setAdminOneOffEndTime] = React.useState("23:59");
+      const [adminOneOffTimezone, setAdminOneOffTimezone] = React.useState("UTC");
+      const [adminOneOffStartDate, setAdminOneOffStartDate] = React.useState("");
+      const [adminOneOffEndDate, setAdminOneOffEndDate] = React.useState("");
       const [curationSearch, setCurationSearch] = React.useState("");
 
       const handleVipToggle = (variantId) => {
@@ -6499,6 +6675,8 @@ app.get("/", async (req, res) => {
             if (data.proValueCap !== undefined) setAdminProCap(data.proValueCap.toString());
             if (data.enterpriseValueCap !== undefined) setAdminEnterpriseCap(data.enterpriseValueCap.toString());
             if (data.campaigns !== undefined) setAdminCampaigns(data.campaigns);
+            if (data.themedBoxes !== undefined) setAdminThemedBoxes(data.themedBoxes);
+            if (data.oneOffBundles !== undefined) setAdminOneOffBundles(data.oneOffBundles);
           })
           .catch(() => {});
       };
@@ -6535,13 +6713,15 @@ app.get("/", async (req, res) => {
             starterValueCap: parseInt(adminStarterCap || "45"),
             proValueCap: parseInt(adminProCap || "80"),
             enterpriseValueCap: parseInt(adminEnterpriseCap || "150"),
-            campaigns: adminCampaigns
+            campaigns: adminCampaigns,
+            themedBoxes: adminThemedBoxes,
+            oneOffBundles: adminOneOffBundles
           })
         })
         .then(res => res.json())
         .then(data => {
           if (data.success) {
-            setNotification("🎨 Curation branding, pricing breaks, campaigns, and custom step labels saved successfully!");
+            setNotification("🎨 Curation branding, pricing breaks, campaigns, themed boxes, holiday bundles, and custom step labels saved successfully!");
             setTimeout(() => setNotification(null), 3000);
             setAdminThemePrimary(primary);
             setAdminThemeSecondary(secondary);
@@ -8060,10 +8240,31 @@ app.get("/", async (req, res) => {
                   ),
                   e("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px" } },
                     e("button", { className: "button-secondary", style: { fontSize: "12px", padding: "6px" }, onClick: togglePauseResume }, portalContract.status === "PAUSED" ? "▶️ Resume" : "⏸️ Pause Routine"),
-                    e("button", { className: "button-secondary", style: { fontSize: "12px", padding: "6px" }, onClick: () => adjustFrequency(45) }, "⚙️ Set 45d")
+                    e("button", { className: "button-primary", style: { fontSize: "12px", padding: "6px" }, onClick: addDynamicAddOnAdmin }, "🛍️ + Curated Add-on")
                   ),
-                  e("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px" } },
-                    e("button", { className: "button-primary", style: { fontSize: "12px", padding: "6px" }, onClick: addDynamicAddOnAdmin }, "🛍️ + Personalized Add-on")
+                  e("div", { style: { borderTop: "1px dashed #cbd5e0", paddingTop: "8px", marginTop: "4px", textAlign: "left" } },
+                    e("div", { style: { fontSize: "10px", fontWeight: "bold", color: "#718096", textTransform: "uppercase", marginBottom: "6px" } }, "Change Delivery Interval"),
+                    e("div", { style: { display: "flex", gap: "6px" } },
+                      [30, 60, 90].map(days => {
+                        const active = portalContract.frequencyDays === days;
+                        return e("button", {
+                          key: days,
+                          onClick: () => adjustFrequency(days),
+                          style: {
+                            flex: 1,
+                            padding: "6px 8px",
+                            fontSize: "11px",
+                            fontWeight: "bold",
+                            borderRadius: "4px",
+                            border: "1.5px solid " + (active ? "#008060" : "#cbd5e0"),
+                            background: active ? "#008060" : "white",
+                            color: active ? "white" : "#4a5568",
+                            cursor: "pointer",
+                            transition: "all 0.3s"
+                          }
+                        }, days + "d");
+                      })
+                    )
                   )
                 )
               )
@@ -8300,6 +8501,15 @@ app.get("/", async (req, res) => {
                     type: "date",
                     value: adminCampaignStart,
                     onChange: (ev) => setAdminCampaignStart(ev.target.value),
+                    style: { width: "100%", padding: "8px", borderRadius: "4px", border: "1px solid #cbd5e0", fontSize: "12px", boxSizing: "border-box" }
+                  })
+                ),
+                e("div", { style: { minWidth: "80px", flex: 0.8 } },
+                  e("label", { style: { display: "block", fontSize: "10px", fontWeight: "bold", color: "#4a5568", marginBottom: "4px" } }, "Start Time"),
+                  e("input", {
+                    type: "time",
+                    value: adminCampaignStartTime,
+                    onChange: (ev) => setAdminCampaignStartTime(ev.target.value),
                     style: { width: "100%", padding: "8px", borderRadius: "6px", border: "1px solid #cbd5e0", fontSize: "12px", boxSizing: "border-box" }
                   })
                 ),
@@ -8309,8 +8519,37 @@ app.get("/", async (req, res) => {
                     type: "date",
                     value: adminCampaignEnd,
                     onChange: (ev) => setAdminCampaignEnd(ev.target.value),
+                    style: { width: "100%", padding: "8px", borderRadius: "4px", border: "1px solid #cbd5e0", fontSize: "12px", boxSizing: "border-box" }
+                  })
+                ),
+                e("div", { style: { minWidth: "80px", flex: 0.8 } },
+                  e("label", { style: { display: "block", fontSize: "10px", fontWeight: "bold", color: "#4a5568", marginBottom: "4px" } }, "End Time"),
+                  e("input", {
+                    type: "time",
+                    value: adminCampaignEndTime,
+                    onChange: (ev) => setAdminCampaignEndTime(ev.target.value),
                     style: { width: "100%", padding: "8px", borderRadius: "6px", border: "1px solid #cbd5e0", fontSize: "12px", boxSizing: "border-box" }
                   })
+                )
+              ),
+
+              e("div", { style: { display: "flex", gap: "12px", flexWrap: "wrap", marginBottom: "12px", alignItems: "flex-end" } },
+                e("div", { style: { minWidth: "160px", flex: 1 } },
+                  e("label", { style: { display: "block", fontSize: "10px", fontWeight: "bold", color: "#4a5568", marginBottom: "4px" } }, "Publishing Timezone"),
+                  e("select", {
+                    value: adminCampaignTimezone,
+                    onChange: (ev) => setAdminCampaignTimezone(ev.target.value),
+                    style: { width: "100%", padding: "8px", borderRadius: "6px", border: "1px solid #cbd5e0", fontSize: "12px", background: "white" }
+                  },
+                    e("option", { value: "UTC" }, "Coordinated Universal Time (UTC)"),
+                    e("option", { value: "America/New_York" }, "US Eastern Standard Time (EST/EDT)"),
+                    e("option", { value: "America/Chicago" }, "US Central Standard Time (CST/CDT)"),
+                    e("option", { value: "America/Denver" }, "US Mountain Standard Time (MST/MDT)"),
+                    e("option", { value: "America/Los_Angeles" }, "US Pacific Standard Time (PST/PDT)"),
+                    e("option", { value: "Europe/London" }, "UK Greenwich Mean Time (GMT/BST)"),
+                    e("option", { value: "Europe/Paris" }, "Central European Time (CET/CEST)"),
+                    e("option", { value: "Asia/Tokyo" }, "Japan Standard Time (JST)")
+                  )
                 ),
                 e("div", { style: { minWidth: "80px", flex: 0.5 } },
                   e("label", { style: { display: "block", fontSize: "10px", fontWeight: "bold", color: "#4a5568", marginBottom: "4px" } }, "Slots"),
@@ -8341,7 +8580,10 @@ app.get("/", async (req, res) => {
                         id: "c-" + Date.now(),
                         name: adminCampaignName,
                         startDate: adminCampaignStart,
+                        startTime: adminCampaignStartTime || "00:00",
                         endDate: adminCampaignEnd,
+                        endTime: adminCampaignEndTime || "23:59",
+                        timezone: adminCampaignTimezone || "UTC",
                         bonusLimit: parseInt(adminCampaignBonus || "2"),
                         priority: parseInt(adminCampaignPriority || "1"),
                         isActive: true
@@ -8376,15 +8618,28 @@ app.get("/", async (req, res) => {
                         .sort((a, b) => b.priority - a.priority)
                         .map((c, idx) => {
                           const now = new Date();
-                          const start = new Date(c.startDate);
-                          const end = new Date(c.endDate);
-                          const isCurrent = now >= start && now <= end;
+                          const tz = c.timezone || "UTC";
+                          const startStr = c.startDate + "T" + (c.startTime || "00:00") + ":00";
+                          const endStr = c.endDate + "T" + (c.endTime || "23:59") + ":59";
+                          const startObj = new Date(startStr);
+                          const endObj = new Date(endStr);
+                          let isCurrent = false;
+                          try {
+                            const nowInTz = new Date(now.toLocaleString("en-US", { timeZone: tz }));
+                            const startInTz = new Date(startObj.toLocaleString("en-US", { timeZone: tz }));
+                            const endInTz = new Date(endObj.toLocaleString("en-US", { timeZone: tz }));
+                            isCurrent = nowInTz >= startInTz && nowInTz <= endInTz;
+                          } catch(e) {
+                            isCurrent = now >= startObj && now <= endObj;
+                          }
                           const statusLabel = !c.isActive ? "Disabled" : (isCurrent ? "🟢 Active Now" : "🟡 Scheduled");
-                          
+
                           return e("tr", { key: c.id, style: { background: isCurrent && c.isActive ? "#fffaf0" : "white", borderTop: "1px solid #edf2f7" } },
                             e("td", { style: { padding: "8px 12px", fontWeight: "bold" } }, "⭐ Priority " + c.priority),
                             e("td", { style: { padding: "8px 12px" } }, c.name),
-                            e("td", { style: { padding: "8px 12px", fontSize: "11px", color: "#4a5568" } }, c.startDate + " to " + c.endDate),
+                            e("td", { style: { padding: "8px 12px", fontSize: "11px", color: "#4a5568" } }, 
+                              c.startDate + " " + (c.startTime || "00:00") + " to " + c.endDate + " " + (c.endTime || "23:59") + " (" + tz + ")"
+                            ),
                             e("td", { style: { padding: "8px 12px", textAlign: "center", fontWeight: "bold" } }, "+" + c.bonusLimit),
                             e("td", { style: { padding: "8px 12px", textAlign: "center", fontWeight: "bold", fontSize: "11px" } }, statusLabel),
                             e("td", { style: { padding: "8px 12px", textAlign: "center", display: "flex", gap: "8px", justifyContent: "center" } },
@@ -8434,11 +8689,354 @@ app.get("/", async (req, res) => {
                   })
                 );
               })
+              )
+              )
+              ),
+
+              // Card 2.5: Pre-Packaged Themed Boxes Creator & Scheduler card!
+              e("div", { className: "card", style: { marginBottom: "20px" } },
+              e("h3", { style: { fontSize: "16px", fontWeight: "600", marginBottom: "8px", display: "flex", alignItems: "center" } }, "🎁 Pre-Packaged Themed Custom Boxes Manager"),
+              e("p", { style: { color: "#6d7175", fontSize: "13px", marginBottom: "16px" } }, "Create ready-to-buy monthly themed custom boxes that subscribers can directly purchase or swap into. The bundle routine slots are automatically pre-configured for them."),
+
+              e("div", { style: { background: "#f8fafc", border: "1px solid #cbd5e0", padding: "16px", borderRadius: "12px", marginBottom: "16px" } },
+              e("div", { style: { fontWeight: "bold", fontSize: "12px", color: "#2b6cb0", marginBottom: "8px" } }, "📝 Create Pre-Packaged Themed Box"),
+
+              e("div", { style: { display: "flex", gap: "12px", flexWrap: "wrap", marginBottom: "12px" } },
+              e("div", { style: { minWidth: "180px", flex: 1.5 } },
+                e("label", { style: { display: "block", fontSize: "10px", fontWeight: "bold", color: "#4a5568", marginBottom: "4px" } }, "Themed Box Name"),
+                e("input", {
+                  type: "text",
+                  value: adminNewThemedName,
+                  placeholder: "e.g. September Hydration Glow Box",
+                  onChange: (ev) => setAdminNewThemedName(ev.target.value),
+                  style: { width: "100%", padding: "8px", borderRadius: "6px", border: "1px solid #cbd5e0", fontSize: "12px", boxSizing: "border-box" }
+                })
+              ),
+              e("div", { style: { minWidth: "100px", flex: 0.8 } },
+                e("label", { style: { display: "block", fontSize: "10px", fontWeight: "bold", color: "#4a5568", marginBottom: "4px" } }, "Flat Box Price ($)"),
+                e("input", {
+                  type: "number",
+                  min: "1",
+                  value: adminNewThemedPrice,
+                  onChange: (ev) => setAdminNewThemedPrice(ev.target.value),
+                  style: { width: "100%", padding: "8px", borderRadius: "6px", border: "1px solid #cbd5e0", fontSize: "12px" }
+                })
+              ),
+              e("div", { style: { minWidth: "120px", flex: 0.8 } },
+                e("label", { style: { display: "block", fontSize: "10px", fontWeight: "bold", color: "#4a5568", marginBottom: "4px" } }, "Billing Schedule"),
+                e("select", {
+                  value: adminNewThemedSchedule,
+                  onChange: (ev) => setAdminNewThemedSchedule(ev.target.value),
+                  style: { width: "100%", padding: "8px", borderRadius: "6px", border: "1px solid #cbd5e0", fontSize: "12px", background: "white" }
+                },
+                  e("option", { value: "Monthly" }, "Every 30 Days (Monthly)"),
+                  e("option", { value: "Bi-Monthly" }, "Every 60 Days (Bi-Monthly)"),
+                  e("option", { value: "Quarterly" }, "Every 90 Days (Quarterly)")
+                )
+              )
+              ),
+
+              e("div", { style: { marginBottom: "12px" } },
+              e("label", { style: { display: "block", fontSize: "10px", fontWeight: "bold", color: "#4a5568", marginBottom: "4px" } }, "Box Description / Themed Edit Details"),
+              e("textarea", {
+                value: adminNewThemedDesc,
+                placeholder: "Describe the routine included in this box (e.g. contains active retinoids, soothing milky toners, etc.)...",
+                onChange: (ev) => setAdminNewThemedDesc(ev.target.value),
+                style: { width: "100%", padding: "8px", borderRadius: "6px", border: "1px solid #cbd5e0", fontSize: "12px", minHeight: "60px", boxSizing: "border-box", outline: "none", resize: "none" }
+              })
+              ),
+
+              e("div", { style: { display: "flex", gap: "12px", flexWrap: "wrap", marginBottom: "12px" } },
+                e("div", { style: { minWidth: "120px", flex: 1 } },
+                  e("label", { style: { display: "block", fontSize: "10px", fontWeight: "bold", color: "#4a5568", marginBottom: "4px" } }, "Go-Live Date (Optional)"),
+                  e("input", { type: "date", value: adminThemedStartDate, onChange: (ev) => setAdminThemedStartDate(ev.target.value), style: { width: "100%", padding: "8px", borderRadius: "6px", border: "1px solid #cbd5e0", fontSize: "12px", boxSizing: "border-box" } })
+                ),
+                e("div", { style: { minWidth: "100px", flex: 0.8 } },
+                  e("label", { style: { display: "block", fontSize: "10px", fontWeight: "bold", color: "#4a5568", marginBottom: "4px" } }, "Go-Live Time"),
+                  e("input", { type: "time", value: adminThemedStartTime, onChange: (ev) => setAdminThemedStartTime(ev.target.value), style: { width: "100%", padding: "8px", borderRadius: "6px", border: "1px solid #cbd5e0", fontSize: "12px", boxSizing: "border-box" } })
+                ),
+                e("div", { style: { minWidth: "120px", flex: 1 } },
+                  e("label", { style: { display: "block", fontSize: "10px", fontWeight: "bold", color: "#4a5568", marginBottom: "4px" } }, "End Date (Optional)"),
+                  e("input", { type: "date", value: adminThemedEndDate, onChange: (ev) => setAdminThemedEndDate(ev.target.value), style: { width: "100%", padding: "8px", borderRadius: "6px", border: "1px solid #cbd5e0", fontSize: "12px", boxSizing: "border-box" } })
+                ),
+                e("div", { style: { minWidth: "100px", flex: 0.8 } },
+                  e("label", { style: { display: "block", fontSize: "10px", fontWeight: "bold", color: "#4a5568", marginBottom: "4px" } }, "End Time"),
+                  e("input", { type: "time", value: adminThemedEndTime, onChange: (ev) => setAdminThemedEndTime(ev.target.value), style: { width: "100%", padding: "8px", borderRadius: "6px", border: "1px solid #cbd5e0", fontSize: "12px", boxSizing: "border-box" } })
+                ),
+                e("div", { style: { minWidth: "160px", flex: 1.2 } },
+                  e("label", { style: { display: "block", fontSize: "10px", fontWeight: "bold", color: "#4a5568", marginBottom: "4px" } }, "Publishing Timezone"),
+                  e("select", {
+                    value: adminThemedTimezone,
+                    onChange: (ev) => setAdminThemedTimezone(ev.target.value),
+                    style: { width: "100%", padding: "8px", borderRadius: "6px", border: "1px solid #cbd5e0", fontSize: "12px", background: "white" }
+                  },
+                    e("option", { value: "UTC" }, "Coordinated Universal Time (UTC)"),
+                    e("option", { value: "America/New_York" }, "US Eastern Standard Time (EST/EDT)"),
+                    e("option", { value: "America/Chicago" }, "US Central Standard Time (CST/CDT)"),
+                    e("option", { value: "America/Denver" }, "US Mountain Standard Time (MST/MDT)"),
+                    e("option", { value: "America/Los_Angeles" }, "US Pacific Standard Time (PST/PDT)"),
+                    e("option", { value: "Europe/London" }, "UK Greenwich Mean Time (GMT/BST)"),
+                    e("option", { value: "Europe/Paris" }, "Central European Time (CET/CEST)"),
+                    e("option", { value: "Asia/Tokyo" }, "Japan Standard Time (JST)")
+                  )
+                )
+              ),
+
+              e("div", { style: { marginBottom: "16px" } },
+              e("label", { style: { display: "block", fontSize: "10px", fontWeight: "bold", color: "#4a5568", marginBottom: "6px" } }, "Pack Products into Box (Select variants for standard routine slots):"),
+              e("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "10px", maxHeight: "150px", overflowY: "auto", padding: "8px", border: "1px solid #cbd5e0", borderRadius: "6px", background: "white" } },
+                shopifyProducts.map((item, idx) => {
+                  const isChecked = adminNewThemedItems.includes(item.variantId);
+                  const handleCheckToggle = () => {
+                    if (isChecked) {
+                      setAdminNewThemedItems(adminNewThemedItems.filter(id => id !== item.variantId));
+                    } else {
+                      setAdminNewThemedItems([...adminNewThemedItems, item.variantId]);
+                    }
+                  };
+                  return e("div", { key: idx, style: { display: "flex", alignItems: "center", gap: "6px" } },
+                    e("input", { type: "checkbox", id: "themed_item_" + idx, checked: isChecked, onChange: handleCheckToggle }),
+                    e("label", { htmlFor: "themed_item_" + idx, style: { fontSize: "11px", cursor: "pointer", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" } }, formatProductName(item.productName))
+                  );
+                })
+              )
+              ),
+
+              e("button", {
+              className: "button-primary",
+              style: { padding: "8px 14px", fontSize: "12px" },
+              disabled: !adminNewThemedName.trim() || adminNewThemedItems.length === 0,
+              onClick: () => {
+                const newBox = {
+                  id: "themed-" + Date.now(),
+                  name: adminNewThemedName,
+                  price: parseFloat(adminNewThemedPrice || "45.00"),
+                  schedule: adminNewThemedSchedule,
+                  description: adminNewThemedDesc,
+                  items: adminNewThemedItems,
+                  publishStartDate: adminThemedStartDate || "",
+                  publishStartTime: adminThemedStartTime || "00:00",
+                  publishEndDate: adminThemedEndDate || "",
+                  publishEndTime: adminThemedEndTime || "23:59",
+                  timezone: adminThemedTimezone || "UTC",
+                  isActive: true
+                };
+                setAdminThemedBoxes([...adminThemedBoxes, newBox]);
+                setAdminNewThemedName("");
+                setAdminNewThemedDesc("");
+                setAdminNewThemedItems([]);
+                setAdminThemedStartDate("");
+                setAdminThemedEndDate("");
+              }
+              }, "🎁 Pack & Schedule Themed Box")
+              ),
+
+              e("div", { style: { borderTop: "1px dashed #cbd5e0", paddingTop: "12px", marginTop: "12px" } },
+              e("div", { style: { fontSize: "11px", fontWeight: "bold", color: "#6d7175", textTransform: "uppercase", marginBottom: "6px" } }, "📋 Active Themed Subscription Boxes"),
+
+              adminThemedBoxes.length === 0 ? e("div", { style: { color: "#a0aec0", fontSize: "12px", fontStyle: "italic", padding: "10px", border: "1px dashed #cbd5e0", borderRadius: "6px", textAlign: "center" } }, "No custom themed boxes active yet. Build a pre-packaged box above!") :
+              e("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "12px" } },
+              adminThemedBoxes.map((box, idx) => {
+                return e("div", { key: box.id, style: { background: box.isActive ? "#fffaf0" : "#fafbfb", border: "1px solid #cbd5e0", borderRadius: "8px", padding: "12px", position: "relative" } },
+                  e("span", { className: "free-gift-badge", style: { position: "absolute", top: "8px", right: "8px", background: box.isActive ? "#008060" : "#a0aec0", color: "white", fontSize: "9px" } }, box.isActive ? "Active Plan" : "Draft"),
+                  e("div", { style: { fontWeight: "bold", fontSize: "13px", color: "#2d3748", marginRight: "50px" } }, box.name),
+                  e("div", { style: { fontSize: "11px", color: "#718096", margin: "2px 0 6px 0" } }, box.schedule + " Plan ➔ $" + box.price.toFixed(2) + " per box"),
+                  e("p", { style: { fontSize: "11px", color: "#4a5568", margin: "0 0 8px 0", fontStyle: "italic", lineHeight: "1.4" } }, box.description || "No description provided."),
+
+                  e("div", { style: { fontSize: "11px", color: "#2d3748", fontWeight: "bold", marginBottom: "4px" } }, "Included Items (" + box.items.length + "):"),
+                  e("div", { style: { border: "1px solid #e1e3e5", background: "white", borderRadius: "4px", padding: "6px", maxHeight: "80px", overflowY: "auto", fontSize: "10px", color: "#4a5568", marginBottom: "10px" } },
+                    box.items.map((vId, iIdx) => {
+                      const prod = shopifyProducts.find(x => x.variantId === vId);
+                      return e("div", { key: iIdx, style: { padding: "2px 0" } }, "📦 " + (prod ? formatProductName(prod.productName) : vId));
+                    })
+                  ),
+
+                  e("div", { style: { display: "flex", gap: "8px" } },
+                    e("button", {
+                      style: { flex: 1, padding: "4px 8px", fontSize: "10px", cursor: "pointer", border: "1px solid #cbd5e0", borderRadius: "4px", background: "white" },
+                      onClick: () => {
+                        setAdminThemedBoxes(adminThemedBoxes.map(x => x.id === box.id ? { ...x, isActive: !x.isActive } : x));
+                      }
+                    }, box.isActive ? "Deactivate" : "Activate"),
+                    e("button", {
+                      style: { flex: 1, padding: "4px 8px", fontSize: "10px", cursor: "pointer", border: "1px solid #fed7d7", borderRadius: "4px", color: "#e53e3e", background: "white" },
+                      onClick: () => {
+                        setAdminThemedBoxes(adminThemedBoxes.filter(x => x.id !== box.id));
+                      }
+                    }, "Delete")
+                  )
+                );
+              })
             )
           )
         ),
 
-          // Card 3: Unified Shopify Product Tags System Reference & Whitelists card!
+        // Card 2.6: Limited-Edition Holiday & Special Occasions One-Off Bundles Manager!
+              e("div", { className: "card", style: { marginBottom: "20px" } },
+                e("h3", { style: { fontSize: "16px", fontWeight: "600", marginBottom: "8px", display: "flex", alignItems: "center" } }, "🎄 Limited-Edition Holiday & Special Occasion Bundles"),
+                e("p", { style: { color: "#6d7175", fontSize: "13px", marginBottom: "16px" } }, "Design one-off (non-subscription) holiday and special occasion gift routines. Customers can purchase these single-purchase bundles by instantly whitelisting them into their upcoming box shipment as non-recurring add-ons."),
+
+                e("div", { style: { background: "#fffaf0", border: "1px solid #feebc8", padding: "16px", borderRadius: "12px", marginBottom: "16px" } },
+                  e("div", { style: { fontWeight: "bold", fontSize: "12px", color: "#b7791f", marginBottom: "8px" } }, "📝 Create Limited-Edition One-Off Gift Set"),
+
+                  e("div", { style: { display: "flex", gap: "12px", flexWrap: "wrap", marginBottom: "12px" } },
+                    e("div", { style: { minWidth: "180px", flex: 1.5 } },
+                      e("label", { style: { display: "block", fontSize: "10px", fontWeight: "bold", color: "#4a5568", marginBottom: "4px" } }, "Bundle Name"),
+                      e("input", {
+                        type: "text",
+                        value: adminNewOneOffName,
+                        placeholder: "e.g. Christmas Radiant Golden Glow Set",
+                        onChange: (ev) => setAdminNewOneOffName(ev.target.value),
+                        style: { width: "100%", padding: "8px", borderRadius: "6px", border: "1px solid #cbd5e0", fontSize: "12px", boxSizing: "border-box" }
+                      })
+                    ),
+                    e("div", { style: { minWidth: "100px", flex: 0.8 } },
+                      e("label", { style: { display: "block", fontSize: "10px", fontWeight: "bold", color: "#4a5568", marginBottom: "4px" } }, "One-Time Price ($)"),
+                      e("input", {
+                        type: "number",
+                        min: "1",
+                        value: adminNewOneOffPrice,
+                        onChange: (ev) => setAdminNewOneOffPrice(ev.target.value),
+                        style: { width: "100%", padding: "8px", borderRadius: "6px", border: "1px solid #cbd5e0", fontSize: "12px" }
+                      })
+                    )
+                  ),
+
+                  e("div", { style: { marginBottom: "12px" } },
+                    e("label", { style: { display: "block", fontSize: "10px", fontWeight: "bold", color: "#4a5568", marginBottom: "4px" } }, "Bundle Description / Special Occasion Details"),
+                    e("textarea", {
+                      value: adminNewOneOffDesc,
+                      placeholder: "Describe the limited-edition routine in this bundle (e.g. includes gold facial rollers, deep repair winter creams, etc.)...",
+                      onChange: (ev) => setAdminNewOneOffDesc(ev.target.value),
+                      style: { width: "100%", padding: "8px", borderRadius: "6px", border: "1px solid #cbd5e0", fontSize: "12px", minHeight: "60px", boxSizing: "border-box", outline: "none", resize: "none" }
+                    })
+                  ),
+
+                  e("div", { style: { display: "flex", gap: "12px", flexWrap: "wrap", marginBottom: "12px" } },
+                    e("div", { style: { minWidth: "120px", flex: 1 } },
+                      e("label", { style: { display: "block", fontSize: "10px", fontWeight: "bold", color: "#4a5568", marginBottom: "4px" } }, "Go-Live Date (Optional)"),
+                      e("input", { type: "date", value: adminOneOffStartDate, onChange: (ev) => setAdminOneOffStartDate(ev.target.value), style: { width: "100%", padding: "8px", borderRadius: "6px", border: "1px solid #cbd5e0", fontSize: "12px", boxSizing: "border-box" } })
+                    ),
+                    e("div", { style: { minWidth: "100px", flex: 0.8 } },
+                      e("label", { style: { display: "block", fontSize: "10px", fontWeight: "bold", color: "#4a5568", marginBottom: "4px" } }, "Go-Live Time"),
+                      e("input", { type: "time", value: adminOneOffStartTime, onChange: (ev) => setAdminOneOffStartTime(ev.target.value), style: { width: "100%", padding: "8px", borderRadius: "6px", border: "1px solid #cbd5e0", fontSize: "12px", boxSizing: "border-box" } })
+                    ),
+                    e("div", { style: { minWidth: "120px", flex: 1 } },
+                      e("label", { style: { display: "block", fontSize: "10px", fontWeight: "bold", color: "#4a5568", marginBottom: "4px" } }, "End Date (Optional)"),
+                      e("input", { type: "date", value: adminOneOffEndDate, onChange: (ev) => setAdminOneOffEndDate(ev.target.value), style: { width: "100%", padding: "8px", borderRadius: "6px", border: "1px solid #cbd5e0", fontSize: "12px", boxSizing: "border-box" } })
+                    ),
+                    e("div", { style: { minWidth: "100px", flex: 0.8 } },
+                      e("label", { style: { display: "block", fontSize: "10px", fontWeight: "bold", color: "#4a5568", marginBottom: "4px" } }, "End Time"),
+                      e("input", { type: "time", value: adminOneOffEndTime, onChange: (ev) => setAdminOneOffEndTime(ev.target.value), style: { width: "100%", padding: "8px", borderRadius: "6px", border: "1px solid #cbd5e0", fontSize: "12px", boxSizing: "border-box" } })
+                    ),
+                    e("div", { style: { minWidth: "160px", flex: 1.2 } },
+                      e("label", { style: { display: "block", fontSize: "10px", fontWeight: "bold", color: "#4a5568", marginBottom: "4px" } }, "Publishing Timezone"),
+                      e("select", {
+                        value: adminOneOffTimezone,
+                        onChange: (ev) => setAdminOneOffTimezone(ev.target.value),
+                        style: { width: "100%", padding: "8px", borderRadius: "6px", border: "1px solid #cbd5e0", fontSize: "12px", background: "white" }
+                      },
+                        e("option", { value: "UTC" }, "Coordinated Universal Time (UTC)"),
+                        e("option", { value: "America/New_York" }, "US Eastern Standard Time (EST/EDT)"),
+                        e("option", { value: "America/Chicago" }, "US Central Standard Time (CST/CDT)"),
+                        e("option", { value: "America/Denver" }, "US Mountain Standard Time (MST/MDT)"),
+                        e("option", { value: "America/Los_Angeles" }, "US Pacific Standard Time (PST/PDT)"),
+                        e("option", { value: "Europe/London" }, "UK Greenwich Mean Time (GMT/BST)"),
+                        e("option", { value: "Europe/Paris" }, "Central European Time (CET/CEST)"),
+                        e("option", { value: "Asia/Tokyo" }, "Japan Standard Time (JST)")
+                      )
+                    )
+                  ),
+
+                  e("div", { style: { marginBottom: "16px" } },
+                    e("label", { style: { display: "block", fontSize: "10px", fontWeight: "bold", color: "#4a5568", marginBottom: "6px" } }, "Pack Products into Bundle:"),
+                    e("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "10px", maxHeight: "150px", overflowY: "auto", padding: "8px", border: "1px solid #cbd5e0", borderRadius: "6px", background: "white" } },
+                      shopifyProducts.map((item, idx) => {
+                        const isChecked = adminNewOneOffItems.includes(item.variantId);
+                        const handleCheckToggle = () => {
+                          if (isChecked) {
+                            setAdminNewOneOffItems(adminNewOneOffItems.filter(id => id !== item.variantId));
+                          } else {
+                            setAdminNewOneOffItems([...adminNewOneOffItems, item.variantId]);
+                          }
+                        };
+                        return e("div", { key: idx, style: { display: "flex", alignItems: "center", gap: "6px" } },
+                          e("input", { type: "checkbox", id: "oneoff_item_" + idx, checked: isChecked, onChange: handleCheckToggle }),
+                          e("label", { htmlFor: "oneoff_item_" + idx, style: { fontSize: "11px", cursor: "pointer", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" } }, formatProductName(item.productName))
+                        );
+                      })
+                    )
+                  ),
+
+                  e("button", {
+                    className: "button-primary",
+                    style: { padding: "8px 14px", fontSize: "12px", backgroundColor: "#b7791f", borderColor: "#b7791f" },
+                    disabled: !adminNewOneOffName.trim() || adminNewOneOffItems.length === 0,
+                    onClick: () => {
+                      const newB = {
+                        id: "oneoff-" + Date.now(),
+                        name: adminNewOneOffName,
+                        price: parseFloat(adminNewOneOffPrice || "75.00"),
+                        description: adminNewOneOffDesc,
+                        items: adminNewOneOffItems,
+                        publishStartDate: adminOneOffStartDate || "",
+                        publishStartTime: adminOneOffStartTime || "00:00",
+                        publishEndDate: adminOneOffEndDate || "",
+                        publishEndTime: adminOneOffEndTime || "23:59",
+                        timezone: adminOneOffTimezone || "UTC",
+                        isActive: true
+                      };
+                      setAdminOneOffBundles([...adminOneOffBundles, newB]);
+                      setAdminNewOneOffName("");
+                      setAdminNewOneOffDesc("");
+                      setAdminNewOneOffItems([]);
+                      setAdminOneOffStartDate("");
+                      setAdminOneOffEndDate("");
+                    }
+                  }, "🎄 Pack & Schedule Gift Bundle")
+                ),
+
+                e("div", { style: { borderTop: "1px dashed #cbd5e0", paddingTop: "12px", marginTop: "12px" } },
+                  e("div", { style: { fontSize: "11px", fontWeight: "bold", color: "#6d7175", textTransform: "uppercase", marginBottom: "6px" } }, "📋 Active Special & Holiday Gift Bundles"),
+
+                  adminOneOffBundles.length === 0 ? e("div", { style: { color: "#a0aec0", fontSize: "12px", fontStyle: "italic", padding: "10px", border: "1px dashed #cbd5e0", borderRadius: "6px", textAlign: "center" } }, "No custom holiday bundles active yet. Pack a limited-edition set above!") :
+                  e("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "12px" } },
+                    adminOneOffBundles.map((bundle, idx) => {
+                      return e("div", { key: bundle.id, style: { background: bundle.isActive ? "#fffaf0" : "#fafbfb", border: "1px solid #cbd5e0", borderRadius: "8px", padding: "12px", position: "relative" } },
+                        e("span", { className: "free-gift-badge", style: { position: "absolute", top: "8px", right: "8px", background: bundle.isActive ? "#d69e2e" : "#a0aec0", color: "white", fontSize: "9px" } }, bundle.isActive ? "🟢 Active One-Off" : "Draft"),
+                        e("div", { style: { fontWeight: "bold", fontSize: "13px", color: "#2d3748", marginRight: "50px" } }, bundle.name),
+                        e("div", { style: { fontSize: "11px", color: "#718096", margin: "2px 0 6px 0" } }, "🎄 Single-Purchase Bundle ➔ $" + bundle.price.toFixed(2) + " (Non-Recurring)"),
+                        e("p", { style: { fontSize: "11px", color: "#4a5568", margin: "0 0 8px 0", fontStyle: "italic", lineHeight: "1.4" } }, bundle.description || "No description provided."),
+
+                        e("div", { style: { fontSize: "11px", color: "#2d3748", fontWeight: "bold", marginBottom: "4px" } }, "Included Items (" + bundle.items.length + "):"),
+                        e("div", { style: { border: "1px solid #e1e3e5", background: "white", borderRadius: "4px", padding: "6px", maxHeight: "80px", overflowY: "auto", fontSize: "10px", color: "#4a5568", marginBottom: "10px" } },
+                          bundle.items.map((vId, iIdx) => {
+                            const prod = shopifyProducts.find(x => x.variantId === vId);
+                            return e("div", { key: iIdx, style: { padding: "2px 0" } }, "🎁 " + (prod ? formatProductName(prod.productName) : vId));
+                          })
+                        ),
+
+                        e("div", { style: { display: "flex", gap: "8px" } },
+                          e("button", {
+                            style: { flex: 1, padding: "4px 8px", fontSize: "10px", cursor: "pointer", border: "1px solid #cbd5e0", borderRadius: "4px", background: "white" },
+                            onClick: () => {
+                              setAdminOneOffBundles(adminOneOffBundles.map(x => x.id === bundle.id ? { ...x, isActive: !x.isActive } : x));
+                            }
+                          }, bundle.isActive ? "Deactivate" : "Activate"),
+                          e("button", {
+                            style: { flex: 1, padding: "4px 8px", fontSize: "10px", cursor: "pointer", border: "1px solid #fed7d7", borderRadius: "4px", color: "#e53e3e", background: "white" },
+                            onClick: () => {
+                              setAdminOneOffBundles(adminOneOffBundles.filter(x => x.id !== bundle.id));
+                            }
+                          }, "Delete")
+                        )
+                      );
+                    })
+                  )
+                )
+              ),
+
+              // Card 3: Unified Shopify Product Tags System Reference & Whitelists card!
           e("div", { className: "card" },
             e("h3", { style: { fontSize: "16px", fontWeight: "600", marginBottom: "12px", display: "flex", alignItems: "center" } }, "🏷️ Shopify Product Tags System Reference & Whitelists"),
             
