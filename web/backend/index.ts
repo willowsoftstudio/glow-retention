@@ -1150,13 +1150,18 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
             dynamicMaxLimit = maxAddonLimit + bonus;
           }
         } else if (type === "CAMPAIGN") {
-          const startStr = merchantConfig ? merchantConfig.campaignStartDate : "";
-          const endStr = merchantConfig ? merchantConfig.campaignEndDate : "";
-          const start = new Date(startStr || "");
-          const end = new Date(endStr || "");
+          const campaigns: any[] = merchantConfig?.campaigns || [];
           const now = new Date();
-          if (!isNaN(start.getTime()) && !isNaN(end.getTime()) && now >= start && now <= end) {
-            const bonus = merchantConfig ? parseInt(merchantConfig.campaignBonusLimit || "2") : 2;
+          const activeOverlapping = campaigns.filter(c => {
+            if (c.isActive === false) return false;
+            const start = new Date(c.startDate);
+            const end = new Date(c.endDate);
+            return now >= start && now <= end;
+          });
+          if (activeOverlapping.length > 0) {
+            activeOverlapping.sort((a, b) => parseInt(b.priority || "1") - parseInt(a.priority || "1"));
+            const highestPriorityCampaign = activeOverlapping[0];
+            const bonus = parseInt(highestPriorityCampaign.bonusLimit || "2");
             dynamicMaxLimit = maxAddonLimit + bonus;
           }
         }
@@ -1235,13 +1240,18 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
             dynamicMaxLimit = maxAddonLimit + bonus;
           }
         } else if (type === "CAMPAIGN") {
-          const startStr = merchantConfig ? merchantConfig.campaignStartDate : "";
-          const endStr = merchantConfig ? merchantConfig.campaignEndDate : "";
-          const start = new Date(startStr || "");
-          const end = new Date(endStr || "");
+          const campaigns: any[] = merchantConfig?.campaigns || [];
           const now = new Date();
-          if (!isNaN(start.getTime()) && !isNaN(end.getTime()) && now >= start && now <= end) {
-            const bonus = merchantConfig ? parseInt(merchantConfig.campaignBonusLimit || "2") : 2;
+          const activeOverlapping = campaigns.filter(c => {
+            if (c.isActive === false) return false;
+            const start = new Date(c.startDate);
+            const end = new Date(c.endDate);
+            return now >= start && now <= end;
+          });
+          if (activeOverlapping.length > 0) {
+            activeOverlapping.sort((a, b) => parseInt(b.priority || "1") - parseInt(a.priority || "1"));
+            const highestPriorityCampaign = activeOverlapping[0];
+            const bonus = parseInt(highestPriorityCampaign.bonusLimit || "2");
             dynamicMaxLimit = maxAddonLimit + bonus;
           }
         }
@@ -2069,13 +2079,18 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
             dynamicMaxLimit = maxAddonLimit + bonus;
           }
         } else if (type === "CAMPAIGN") {
-          const startStr = allConfigs ? allConfigs.campaignStartDate : "";
-          const endStr = allConfigs ? allConfigs.campaignEndDate : "";
-          const start = new Date(startStr || "");
-          const end = new Date(endStr || "");
+          const campaigns: any[] = allConfigs?.campaigns || [];
           const now = new Date();
-          if (!isNaN(start.getTime()) && !isNaN(end.getTime()) && now >= start && now <= end) {
-            const bonus = allConfigs ? parseInt(allConfigs.campaignBonusLimit || "2") : 2;
+          const activeOverlapping = campaigns.filter(c => {
+            if (c.isActive === false) return false;
+            const start = new Date(c.startDate);
+            const end = new Date(c.endDate);
+            return now >= start && now <= end;
+          });
+          if (activeOverlapping.length > 0) {
+            activeOverlapping.sort((a, b) => parseInt(b.priority || "1") - parseInt(a.priority || "1"));
+            const highestPriorityCampaign = activeOverlapping[0];
+            const bonus = parseInt(highestPriorityCampaign.bonusLimit || "2");
             dynamicMaxLimit = maxAddonLimit + bonus;
           }
         }
@@ -5120,12 +5135,12 @@ app.get("/api/admin/settings", async (req, res) => {
   }
 });
 
-// PATCH /api/admin/settings (Update pricing/margin settings)
+// PATCH /api/admin/settings (Update pricing/margin settings + value caps)
 app.patch("/api/admin/settings", async (req, res) => {
   try {
     const session = res.locals.shopify.session;
     const shop = session.shop;
-    const { boxPriceLow, boxPriceMedium, boxPriceHigh, targetMargin } = req.body;
+    const { boxPriceLow, boxPriceMedium, boxPriceHigh, targetMargin, starterValueCap, proValueCap, enterpriseValueCap } = req.body;
 
     await prisma.session.updateMany({
       where: { shop },
@@ -5136,6 +5151,21 @@ app.patch("/api/admin/settings", async (req, res) => {
         targetMargin: parseFloat(targetMargin)
       }
     });
+
+    const dbSession = await prisma.session.findFirst({ where: { shop } });
+    if (dbSession) {
+      const existingConfig = dbSession.themeSettingsJson ? JSON.parse(dbSession.themeSettingsJson) : {};
+      const newConfig = {
+        ...existingConfig,
+        starterValueCap: starterValueCap !== undefined ? parseInt(starterValueCap) : (existingConfig.starterValueCap !== undefined ? existingConfig.starterValueCap : 45),
+        proValueCap: proValueCap !== undefined ? parseInt(proValueCap) : (existingConfig.proValueCap !== undefined ? existingConfig.proValueCap : 80),
+        enterpriseValueCap: enterpriseValueCap !== undefined ? parseInt(enterpriseValueCap) : (existingConfig.enterpriseValueCap !== undefined ? existingConfig.enterpriseValueCap : 150)
+      };
+      await prisma.session.update({
+        where: { id: dbSession.id },
+        data: { themeSettingsJson: JSON.stringify(newConfig) }
+      });
+    }
 
     res.json({ success: true });
   } catch (err: any) {
@@ -6069,6 +6099,8 @@ app.get("/", async (req, res) => {
       const [adminCampaignStart, setAdminCampaignStart] = React.useState(new Date().toISOString().split("T")[0]);
       const [adminCampaignEnd, setAdminCampaignEnd] = React.useState(new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split("T")[0]);
       const [adminCampaignBonus, setAdminCampaignBonus] = React.useState("2");
+      const [adminCampaigns, setAdminCampaigns] = React.useState([]);
+      const [adminCampaignPriority, setAdminCampaignPriority] = React.useState("1");
       const [curationSearch, setCurationSearch] = React.useState("");
 
       const handleVipToggle = (variantId) => {
@@ -6311,7 +6343,7 @@ app.get("/", async (req, res) => {
         .catch(err => console.error("Billing upgrade failed:", err));
       };
 
-      const handleSaveSettings = (low, med, high, margin) => {
+      const handleSaveSettings = (low, med, high, margin, starter, pro, enterprise) => {
         fetch("/api/admin/settings", {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
@@ -6319,13 +6351,19 @@ app.get("/", async (req, res) => {
             boxPriceLow: low,
             boxPriceMedium: med,
             boxPriceHigh: high,
-            targetMargin: margin
+            targetMargin: margin,
+            starterValueCap: starter,
+            proValueCap: pro,
+            enterpriseValueCap: enterprise
           })
         })
         .then(res => res.json())
         .then(() => {
-          setNotification("💾 Curation price & margin settings saved successfully!");
+          setNotification("💾 Curation prices, profit margins, and value caps saved successfully!");
           setSettings({ boxPriceLow: parseFloat(low), boxPriceMedium: parseFloat(med), boxPriceHigh: parseFloat(high), targetMargin: parseFloat(margin) });
+          setAdminStarterCap(starter);
+          setAdminProCap(pro);
+          setAdminEnterpriseCap(enterprise);
         })
         .catch(err => console.error("Failed to save settings:", err));
       };
@@ -6454,6 +6492,7 @@ app.get("/", async (req, res) => {
             if (data.starterValueCap !== undefined) setAdminStarterCap(data.starterValueCap.toString());
             if (data.proValueCap !== undefined) setAdminProCap(data.proValueCap.toString());
             if (data.enterpriseValueCap !== undefined) setAdminEnterpriseCap(data.enterpriseValueCap.toString());
+            if (data.campaigns !== undefined) setAdminCampaigns(data.campaigns);
           })
           .catch(() => {});
       };
@@ -6489,13 +6528,14 @@ app.get("/", async (req, res) => {
             discountProfiles: profiles,
             starterValueCap: parseInt(adminStarterCap || "45"),
             proValueCap: parseInt(adminProCap || "80"),
-            enterpriseValueCap: parseInt(adminEnterpriseCap || "150")
+            enterpriseValueCap: parseInt(adminEnterpriseCap || "150"),
+            campaigns: adminCampaigns
           })
         })
         .then(res => res.json())
         .then(data => {
           if (data.success) {
-            setNotification("🎨 Curation branding, pricing breaks, and custom step labels saved successfully!");
+            setNotification("🎨 Curation branding, pricing breaks, campaigns, and custom step labels saved successfully!");
             setTimeout(() => setNotification(null), 3000);
             setAdminThemePrimary(primary);
             setAdminThemeSecondary(secondary);
@@ -8065,6 +8105,32 @@ app.get("/", async (req, res) => {
       };
 
       const renderSettingsTab = () => {
+        const addonsToRender = (() => {
+          const list = [...inventory];
+          adminAddons.forEach(addonId => {
+            if (!list.some(x => x.productId === addonId)) {
+              const matched = shopifyProducts.find(x => x.variantId === addonId);
+              if (matched) {
+                list.push({ productId: addonId, productName: matched.productName, price: matched.price, cost: matched.cost });
+              }
+            }
+          });
+          return list;
+        })();
+
+        const vipsToRender = (() => {
+          const list = [...inventory];
+          adminVipRedemptions.forEach(vip => {
+            if (!list.some(x => x.productId === vip.variantId)) {
+              const matched = shopifyProducts.find(x => x.variantId === vip.variantId);
+              if (matched) {
+                list.push({ productId: vip.variantId, productName: matched.productName, price: matched.price, cost: matched.cost });
+              }
+            }
+          });
+          return list;
+        })();
+
         return e("div", null,
           e("div", { className: "card", style: { marginBottom: "20px" } },
             e("h3", { style: { fontSize: "16px", fontWeight: "600", marginBottom: "8px", display: "flex", alignItems: "center" } }, "🎯 Adaptive Curation Margin & Price Settings"),
@@ -8088,7 +8154,41 @@ app.get("/", async (req, res) => {
                 e("input", { type: "number", value: settingsMargin, onChange: (e) => setSettingsMargin(e.target.value), style: { width: "100%", padding: "10px", borderRadius: "6px", border: "1px solid #cbd5e0", fontSize: "13px", outline: "none", boxSizing: "border-box" } })
               )
             ),
-            e("button", { className: "button-primary", onClick: () => handleSaveSettings(settingsLow, settingsMedium, settingsHigh, settingsMargin) }, "💾 Save Curation Settings")
+
+            e("div", { style: { display: "flex", gap: "24px", flexWrap: "wrap", alignItems: "center", borderTop: "1px dashed #cbd5e0", paddingTop: "12px", marginTop: "12px", marginBottom: "16px" } },
+              e("div", { style: { minWidth: "180px", flex: 1 } },
+                e("label", { style: { display: "block", fontSize: "12px", fontWeight: "bold", color: "#4a5568", marginBottom: "6px" } }, "Starter Max Product Value Cap ($)"),
+                e("input", { 
+                  type: "number", 
+                  min: "1", 
+                  value: adminStarterCap, 
+                  onChange: (ev) => setAdminStarterCap(ev.target.value), 
+                  style: { width: "100%", padding: "10px", borderRadius: "6px", border: "1px solid #cbd5e0", fontSize: "13px", outline: "none", boxSizing: "border-box" } 
+                })
+              ),
+              e("div", { style: { minWidth: "180px", flex: 1 } },
+                e("label", { style: { display: "block", fontSize: "12px", fontWeight: "bold", color: "#4a5568", marginBottom: "6px" } }, "Pro Max Product Value Cap ($)"),
+                e("input", { 
+                  type: "number", 
+                  min: "1", 
+                  value: adminProCap, 
+                  onChange: (ev) => setAdminProCap(ev.target.value), 
+                  style: { width: "100%", padding: "10px", borderRadius: "6px", border: "1px solid #cbd5e0", fontSize: "13px", outline: "none", boxSizing: "border-box" } 
+                })
+              ),
+              e("div", { style: { minWidth: "180px", flex: 1 } },
+                e("label", { style: { display: "block", fontSize: "12px", fontWeight: "bold", color: "#4a5568", marginBottom: "6px" } }, "Enterprise Max Product Value Cap ($)"),
+                e("input", { 
+                  type: "number", 
+                  min: "1", 
+                  value: adminEnterpriseCap, 
+                  onChange: (ev) => setAdminEnterpriseCap(ev.target.value), 
+                  style: { width: "100%", padding: "10px", borderRadius: "6px", border: "1px solid #cbd5e0", fontSize: "13px", outline: "none", boxSizing: "border-box" } 
+                })
+              )
+            ),
+
+            e("button", { className: "button-primary", onClick: () => handleSaveSettings(settingsLow, settingsMedium, settingsHigh, settingsMargin, adminStarterCap, adminProCap, adminEnterpriseCap) }, "💾 Save Curation & Cap Settings")
           ),
 
           e("div", { className: "card" },
@@ -8132,39 +8232,6 @@ app.get("/", async (req, res) => {
             )
           ),
 
-          e("div", { style: { display: "flex", gap: "24px", flexWrap: "wrap", alignItems: "center", marginBottom: "16px", borderTop: "1px dashed #cbd5e0", paddingTop: "12px" } },
-            e("div", { style: { minWidth: "180px", flex: 1 } },
-              e("label", { style: { display: "block", fontSize: "12px", fontWeight: "bold", color: "#4a5568", marginBottom: "6px" } }, "Starter Max Product Value Cap ($)"),
-              e("input", { 
-                type: "number", 
-                min: "1", 
-                value: adminStarterCap, 
-                onChange: (ev) => setAdminStarterCap(ev.target.value), 
-                style: { width: "100%", padding: "10px", borderRadius: "6px", border: "1px solid #cbd5e0", fontSize: "13px", outline: "none", boxSizing: "border-box" } 
-              })
-            ),
-            e("div", { style: { minWidth: "180px", flex: 1 } },
-              e("label", { style: { display: "block", fontSize: "12px", fontWeight: "bold", color: "#4a5568", marginBottom: "6px" } }, "Pro Max Product Value Cap ($)"),
-              e("input", { 
-                type: "number", 
-                min: "1", 
-                value: adminProCap, 
-                onChange: (ev) => setAdminProCap(ev.target.value), 
-                style: { width: "100%", padding: "10px", borderRadius: "6px", border: "1px solid #cbd5e0", fontSize: "13px", outline: "none", boxSizing: "border-box" } 
-              })
-            ),
-            e("div", { style: { minWidth: "180px", flex: 1 } },
-              e("label", { style: { display: "block", fontSize: "12px", fontWeight: "bold", color: "#4a5568", marginBottom: "6px" } }, "Enterprise Max Product Value Cap ($)"),
-              e("input", { 
-                type: "number", 
-                min: "1", 
-                value: adminEnterpriseCap, 
-                onChange: (ev) => setAdminEnterpriseCap(ev.target.value), 
-                style: { width: "100%", padding: "10px", borderRadius: "6px", border: "1px solid #cbd5e0", fontSize: "13px", outline: "none", boxSizing: "border-box" } 
-              })
-            )
-          ),
-
           // Exposing Promotional Campaigns & Dynamic Gating Rules configurator
           e("div", { style: { borderTop: "1px solid #cbd5e0", paddingTop: "16px", marginBottom: "20px" } },
             e("h4", { style: { fontSize: "14px", fontWeight: "600", color: "#2c3e50", marginBottom: "8px" } }, "✨ Configure Promotional Campaigns & Dynamic Gating Rules"),
@@ -8180,7 +8247,7 @@ app.get("/", async (req, res) => {
                 },
                   e("option", { value: "MANUAL" }, "Manual Shop-Wide Limits (No Campaign)"),
                   e("option", { value: "TENURE" }, "Loyalty Tenure-Based Unlocks (Reward Long-Term Subscribers)"),
-                  e("option", { value: "CAMPAIGN" }, "Automated Campaign Flash Events (Black Friday / Holidays)")
+                  e("option", { value: "CAMPAIGN" }, "Priority-Based Multi-Campaigns (Date-Aware Precedence)")
                 )
               )
             ),
@@ -8208,46 +8275,130 @@ app.get("/", async (req, res) => {
               )
             ),
 
-            adminPromoType === "CAMPAIGN" && e("div", { style: { background: "#fffaf0", border: "1px solid #feebc8", padding: "12px", borderRadius: "6px", display: "flex", flexDirection: "column", gap: "12px", marginBottom: "12px" } },
-              e("div", { style: { display: "flex", gap: "16px", flexWrap: "wrap" } },
-                e("div", { style: { minWidth: "200px", flex: 1.5 } },
-                  e("label", { style: { display: "block", fontSize: "11px", fontWeight: "bold", color: "#4a5568", marginBottom: "6px" } }, "Promo Campaign Name"),
+            adminPromoType === "CAMPAIGN" && e("div", { style: { background: "#fffaf0", border: "1px solid #feebc8", padding: "12px", borderRadius: "6px", marginBottom: "12px" } },
+              e("div", { style: { fontWeight: "bold", fontSize: "12px", color: "#7b341e", marginBottom: "8px" } }, "📝 Create Promotional Campaign"),
+              e("div", { style: { display: "flex", gap: "12px", flexWrap: "wrap", marginBottom: "12px", alignItems: "flex-end" } },
+                e("div", { style: { minWidth: "160px", flex: 1.5 } },
+                  e("label", { style: { display: "block", fontSize: "10px", fontWeight: "bold", color: "#4a5568", marginBottom: "4px" } }, "Campaign Name"),
                   e("input", {
                     type: "text",
                     value: adminCampaignName,
+                    placeholder: "e.g. Winter Holiday Sparkle",
                     onChange: (ev) => setAdminCampaignName(ev.target.value),
-                    style: { width: "100%", padding: "8px", borderRadius: "4px", border: "1px solid #cbd5e0", fontSize: "12px", boxSizing: "border-box" }
+                    style: { width: "100%", padding: "8px", borderRadius: "6px", border: "1px solid #cbd5e0", fontSize: "12px", boxSizing: "border-box" }
                   })
                 ),
-                e("div", { style: { minWidth: "120px", flex: 0.8 } },
-                  e("label", { style: { display: "block", fontSize: "11px", fontWeight: "bold", color: "#4a5568", marginBottom: "6px" } }, "Campaign Bonus Slots"),
+                e("div", { style: { minWidth: "100px", flex: 1 } },
+                  e("label", { style: { display: "block", fontSize: "10px", fontWeight: "bold", color: "#4a5568", marginBottom: "4px" } }, "Start Date"),
+                  e("input", {
+                    type: "date",
+                    value: adminCampaignStart,
+                    onChange: (ev) => setAdminCampaignStart(ev.target.value),
+                    style: { width: "100%", padding: "8px", borderRadius: "6px", border: "1px solid #cbd5e0", fontSize: "12px", boxSizing: "border-box" }
+                  })
+                ),
+                e("div", { style: { minWidth: "100px", flex: 1 } },
+                  e("label", { style: { display: "block", fontSize: "10px", fontWeight: "bold", color: "#4a5568", marginBottom: "4px" } }, "End Date"),
+                  e("input", {
+                    type: "date",
+                    value: adminCampaignEnd,
+                    onChange: (ev) => setAdminCampaignEnd(ev.target.value),
+                    style: { width: "100%", padding: "8px", borderRadius: "6px", border: "1px solid #cbd5e0", fontSize: "12px", boxSizing: "border-box" }
+                  })
+                ),
+                e("div", { style: { minWidth: "80px", flex: 0.5 } },
+                  e("label", { style: { display: "block", fontSize: "10px", fontWeight: "bold", color: "#4a5568", marginBottom: "4px" } }, "Slots"),
                   e("input", {
                     type: "number",
                     min: "1",
                     value: adminCampaignBonus,
                     onChange: (ev) => setAdminCampaignBonus(ev.target.value),
-                    style: { width: "100%", padding: "8px", borderRadius: "4px", border: "1px solid #cbd5e0", fontSize: "12px" }
-                  })
-                )
-              ),
-              e("div", { style: { display: "flex", gap: "16px", flexWrap: "wrap" } },
-                e("div", { style: { minWidth: "160px", flex: 1 } },
-                  e("label", { style: { display: "block", fontSize: "11px", fontWeight: "bold", color: "#4a5568", marginBottom: "6px" } }, "Campaign Start Date"),
-                  e("input", {
-                    type: "date",
-                    value: adminCampaignStart,
-                    onChange: (ev) => setAdminCampaignStart(ev.target.value),
-                    style: { width: "100%", padding: "8px", borderRadius: "4px", border: "1px solid #cbd5e0", fontSize: "12px", boxSizing: "border-box" }
+                    style: { width: "100%", padding: "8px", borderRadius: "6px", border: "1px solid #cbd5e0", fontSize: "12px" }
                   })
                 ),
-                e("div", { style: { minWidth: "160px", flex: 1 } },
-                  e("label", { style: { display: "block", fontSize: "11px", fontWeight: "bold", color: "#4a5568", marginBottom: "6px" } }, "Campaign End Date"),
+                e("div", { style: { minWidth: "80px", flex: 0.5 } },
+                  e("label", { style: { display: "block", fontSize: "10px", fontWeight: "bold", color: "#4a5568", marginBottom: "4px" } }, "Priority"),
                   e("input", {
-                    type: "date",
-                    value: adminCampaignEnd,
-                    onChange: (ev) => setAdminCampaignEnd(ev.target.value),
-                    style: { width: "100%", padding: "8px", borderRadius: "4px", border: "1px solid #cbd5e0", fontSize: "12px", boxSizing: "border-box" }
+                    type: "number",
+                    min: "1",
+                    value: adminCampaignPriority,
+                    onChange: (ev) => setAdminCampaignPriority(ev.target.value),
+                    style: { width: "100%", padding: "8px", borderRadius: "6px", border: "1px solid #cbd5e0", fontSize: "12px" }
                   })
+                ),
+                e("button", {
+                  className: "button-primary",
+                  style: { padding: "8px 12px", fontSize: "12px", height: "34px", display: "flex", alignItems: "center" },
+                  onClick: () => {
+                    if (adminCampaignName.trim()) {
+                      const newC = {
+                        id: "c-" + Date.now(),
+                        name: adminCampaignName,
+                        startDate: adminCampaignStart,
+                        endDate: adminCampaignEnd,
+                        bonusLimit: parseInt(adminCampaignBonus || "2"),
+                        priority: parseInt(adminCampaignPriority || "1"),
+                        isActive: true
+                      };
+                      setAdminCampaigns([...adminCampaigns, newC]);
+                      setAdminCampaignName("");
+                      setAdminCampaignPriority("1");
+                    }
+                  }
+                }, "➕ Add Campaign")
+              ),
+
+              e("div", { style: { borderTop: "1px dashed #cbd5e0", paddingTop: "12px", marginTop: "12px" } },
+                e("div", { style: { fontSize: "11px", fontWeight: "bold", color: "#6d7175", textTransform: "uppercase", marginBottom: "6px" } }, "📋 Active & Scheduled Campaigns (Priority Precedence)"),
+                e("p", { style: { color: "#6d7175", fontSize: "11px", margin: "0 0 10px 0", lineHeight: "1.4" } }, "Campaigns do not stack. If multiple active campaigns overlap, the campaign with the highest Priority evaluated first takes precedence automatically:"),
+                
+                adminCampaigns.length === 0 ? e("div", { style: { color: "#a0aec0", fontSize: "12px", fontStyle: "italic", padding: "10px", border: "1px dashed #cbd5e0", borderRadius: "6px", textAlign: "center" } }, "No campaigns configured yet. Add a campaign above to begin!") :
+                e("div", { style: { border: "1px solid #e1e3e5", borderRadius: "6px", overflow: "hidden" } },
+                  e("table", { style: { margin: 0, fontSize: "12px" } },
+                    e("thead", null,
+                      e("tr", { style: { background: "#fafbfb" } },
+                        e("th", { style: { padding: "8px 12px" } }, "Priority"),
+                        e("th", { style: { padding: "8px 12px" } }, "Campaign Name"),
+                        e("th", { style: { padding: "8px 12px" } }, "Duration"),
+                        e("th", { style: { padding: "8px 12px", textAlign: "center" } }, "Bonus Slots"),
+                        e("th", { style: { padding: "8px 12px", textAlign: "center" } }, "Status"),
+                        e("th", { style: { padding: "8px 12px", textAlign: "center" } }, "Action")
+                      )
+                    ),
+                    e("tbody", null,
+                      [...adminCampaigns]
+                        .sort((a, b) => b.priority - a.priority)
+                        .map((c, idx) => {
+                          const now = new Date();
+                          const start = new Date(c.startDate);
+                          const end = new Date(c.endDate);
+                          const isCurrent = now >= start && now <= end;
+                          const statusLabel = !c.isActive ? "Disabled" : (isCurrent ? "🟢 Active Now" : "🟡 Scheduled");
+                          
+                          return e("tr", { key: c.id, style: { background: isCurrent && c.isActive ? "#fffaf0" : "white", borderTop: "1px solid #edf2f7" } },
+                            e("td", { style: { padding: "8px 12px", fontWeight: "bold" } }, "⭐ Priority " + c.priority),
+                            e("td", { style: { padding: "8px 12px" } }, c.name),
+                            e("td", { style: { padding: "8px 12px", fontSize: "11px", color: "#4a5568" } }, c.startDate + " to " + c.endDate),
+                            e("td", { style: { padding: "8px 12px", textAlign: "center", fontWeight: "bold" } }, "+" + c.bonusLimit),
+                            e("td", { style: { padding: "8px 12px", textAlign: "center", fontWeight: "bold", fontSize: "11px" } }, statusLabel),
+                            e("td", { style: { padding: "8px 12px", textAlign: "center", display: "flex", gap: "8px", justifyContent: "center" } },
+                              e("button", {
+                                style: { padding: "2px 6px", fontSize: "10px", cursor: "pointer", border: "1px solid #cbd5e0", borderRadius: "4px", background: "white" },
+                                onClick: () => {
+                                  setAdminCampaigns(adminCampaigns.map(x => x.id === c.id ? { ...x, isActive: !x.isActive } : x));
+                                }
+                              }, c.isActive ? "Disable" : "Enable"),
+                              e("button", {
+                                style: { padding: "2px 6px", fontSize: "10px", cursor: "pointer", border: "1px solid #fed7d7", borderRadius: "4px", color: "#e53e3e", background: "white" },
+                                onClick: () => {
+                                  setAdminCampaigns(adminCampaigns.filter(x => x.id !== c.id));
+                                }
+                              }, "Delete")
+                            )
+                          );
+                        })
+                    )
+                  )
                 )
               )
             )
@@ -8364,7 +8515,7 @@ app.get("/", async (req, res) => {
               e("h4", { style: { fontSize: "13px", fontWeight: "bold", color: "#2c3e50", marginBottom: "6px" } }, "🛍️ Configure Allowed Subscription Add-Ons Catalog"),
               e("p", { style: { color: "#6d7175", fontSize: "12px", marginBottom: "12px" } }, "Choose which product variants from your live Shopify catalog are permitted for one-time subscription add-ons inside visual cart slots and chatbots."),
               e("div", { style: { maxHeight: "200px", overflowY: "auto", border: "1px solid #e1e3e5", padding: "10px", borderRadius: "4px", backgroundColor: "#fafbfb" } },
-                inventory.map((item, idx) => {
+                addonsToRender.map((item, idx) => {
                   const isChecked = adminAddons.includes(item.productId);
                   return e("div", { key: idx, style: { display: "flex", alignItems: "center", marginBottom: "10px" } },
                     e("input", { 
@@ -8398,10 +8549,6 @@ app.get("/", async (req, res) => {
                     const val = selectEl ? selectEl.value : "";
                     if (val) {
                       setAdminAddons([...adminAddons, val]);
-                      const matched = shopifyProducts.find(x => x.variantId === val);
-                      if (matched && !inventory.some(x => x.productId === val)) {
-                        setInventory([...inventory, { productId: val, productName: matched.productName, price: matched.price, cost: matched.cost }]);
-                      }
                       if (selectEl) selectEl.value = "";
                     }
                   }
@@ -8414,7 +8561,7 @@ app.get("/", async (req, res) => {
               e("h4", { style: { fontSize: "13px", fontWeight: "bold", color: "#2c3e50", marginBottom: "6px" } }, "✨ Configure Glow Points VIP Redemptions Catalog"),
               e("p", { style: { color: "#6d7175", fontSize: "12px", marginBottom: "12px" } }, "Select which products are eligible for loyalty points redemption, and specify their points values."),
               e("div", { style: { maxHeight: "200px", overflowY: "auto", border: "1px solid #e1e3e5", padding: "10px", borderRadius: "4px", backgroundColor: "#fafbfb" } },
-                inventory.map((item, idx) => {
+                vipsToRender.map((item, idx) => {
                   const vipItem = adminVipRedemptions.find(x => x.variantId === item.productId);
                   const isChecked = !!vipItem;
                   const pointsVal = vipItem ? vipItem.points : Math.max(10, Math.round((item.price || 30.0) * 1.5));
@@ -8465,9 +8612,6 @@ app.get("/", async (req, res) => {
                       const matched = shopifyProducts.find(x => x.variantId === val);
                       const defaultPoints = matched ? Math.max(10, Math.round(matched.price * 1.5)) : 50;
                       setAdminVipRedemptions([...adminVipRedemptions, { variantId: val, points: defaultPoints }]);
-                      if (matched && !inventory.some(x => x.productId === val)) {
-                        setInventory([...inventory, { productId: val, productName: matched.productName, price: matched.price, cost: matched.cost }]);
-                      }
                       if (selectEl) selectEl.value = "";
                     }
                   }
