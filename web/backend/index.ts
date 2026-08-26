@@ -2100,6 +2100,9 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
       const dbSessionRecord = await prisma.session.findFirst({ where: { shop } });
       const milestoneCount = dbSessionRecord?.milestoneOrderCount || 3;
       const giftIds = JSON.parse(dbSessionRecord?.giftVariantIds || "[]");
+      const boxPriceLow = dbSessionRecord?.boxPriceLow || 30.0;
+      const boxPriceMedium = dbSessionRecord?.boxPriceMedium || 60.0;
+      const boxPriceHigh = dbSessionRecord?.boxPriceHigh || 120.0;
 
       res.setHeader("Content-Type", "text/html");
       res.send(`<!DOCTYPE html>
@@ -2666,6 +2669,9 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
       const starterValueCap = ${starterValueCap};
       const proValueCap = ${proValueCap};
       const enterpriseValueCap = ${enterpriseValueCap};
+      const priceLow = ${boxPriceLow};
+      const priceMedium = ${boxPriceMedium};
+      const priceHigh = ${boxPriceHigh};
 
       const [selectedGiftId, setSelectedGiftId] = React.useState("");
       const [claimingGift, setClaimingGift] = React.useState(false);
