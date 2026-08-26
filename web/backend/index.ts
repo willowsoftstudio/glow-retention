@@ -2822,7 +2822,7 @@ app.get("/api/admin/billing/check-or-start", async (req, res) => {
           else if (currentTier === "ENTERPRISE") baseBoxPrice = priceHigh;
 
           // Enforce promo discounts applied directly on their curated flat-rate total
-          const contractDiscount = contract ? ((contract as any).discountPercentage || 0) : 0;
+          const contractDiscount = contract ? (contract.discountPercentage || 0) : 0;
           coreSum = baseBoxPrice * ((100 - contractDiscount) / 100);
         } else {
           // Flexible volume breaks for Build-Your-Own Box recurring items
